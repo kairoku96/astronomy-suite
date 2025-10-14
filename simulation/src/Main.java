@@ -99,14 +99,16 @@ public class Main {
 
     // Planet structure (SI units for pos, vel, mass, radius)
     static class Planet {
-        Vector3d pos; // meters
-        Vector3d vel; // m/s
-        double mass;  // kg
-        double radius; // meters
-        Vector3f color; // rgb
-        float displayRadius; // scene units
-        String name; // Added for labeling
+        Vector3d pos;
+        Vector3d vel;
+        double mass;
+        double radius;
+        Vector3f color;
+        float displayRadius;
+        String name;
         LinkedList<Vector3f> trail = new LinkedList<>();
+        // Add orbital elements for analytic orbit generation
+        double a_au, e, i_rad, omega_rad, Omega_rad, M_rad, mu;
         Planet(Vector3d pos, Vector3d vel, double mass, double radius, Vector3f color, String name) {
             this.pos = pos;
             this.vel = vel;
@@ -116,6 +118,7 @@ public class Main {
             this.name = name;
         }
     }
+
 
     private final List<Planet> planets = new ArrayList<>();
 
@@ -204,6 +207,13 @@ public class Main {
         double M_mercury = L_mercury - varpi_mercury;
         Vector3d[] state_mercury = getOrbitalState(a_mercury, e_mercury, i_mercury, omega_mercury, Omega_mercury, M_mercury, mu_sun);
         Planet mercury = new Planet(state_mercury[0], state_mercury[1], 3.3011e23, 2439.7e3, new Vector3f(0.7f, 0.7f, 0.7f), "Mercury");
+        mercury.a_au = a_mercury;
+        mercury.e = e_mercury;
+        mercury.i_rad = i_mercury;
+        mercury.omega_rad = omega_mercury;
+        mercury.Omega_rad = Omega_mercury;
+        mercury.M_rad = M_mercury;
+        mercury.mu = mu_sun;
         moonParents.add(1); // Should be 0 (orbits Sun)
         planets.add(mercury);
 
@@ -218,6 +228,13 @@ public class Main {
         double M_venus = L_venus - varpi_venus;
         Vector3d[] state_venus = getOrbitalState(a_venus, e_venus, i_venus, omega_venus, Omega_venus, M_venus, mu_sun);
         Planet venus = new Planet(state_venus[0], state_venus[1], 4.8675e24, 6051.8e3, new Vector3f(0.95f, 0.7f, 0.4f), "Venus");
+        venus.a_au = a_venus;
+        venus.e = e_venus;
+        venus.i_rad = i_venus;
+        venus.omega_rad = omega_venus;
+        venus.Omega_rad = Omega_venus;
+        venus.M_rad = M_venus;
+        venus.mu = mu_sun;
         moonParents.add(2); // Should be 0
         planets.add(venus);
 
@@ -232,6 +249,13 @@ public class Main {
         double M_earth = L_earth - varpi_earth;
         Vector3d[] state_earth = getOrbitalState(a_earth, e_earth, i_earth, omega_earth, Omega_earth, M_earth, mu_sun);
         Planet earth = new Planet(state_earth[0], state_earth[1], 5.97219e24, 6378e3, new Vector3f(0.18f, 0.45f, 0.9f), "Earth");
+        earth.a_au = a_earth;
+        earth.e = e_earth;
+        earth.i_rad = i_earth;
+        earth.omega_rad = omega_earth;
+        earth.Omega_rad = Omega_earth;
+        earth.M_rad = M_earth;
+        earth.mu = mu_sun;
         moonParents.add(3);
         planets.add(earth);
 
@@ -261,6 +285,13 @@ public class Main {
         double M_mars = L_mars - varpi_mars;
         Vector3d[] state_mars = getOrbitalState(a_mars, e_mars, i_mars, omega_mars, Omega_mars, M_mars, mu_sun);
         Planet mars = new Planet(state_mars[0], state_mars[1], 6.4171e23, 3389.5e3, new Vector3f(1.0f, 0.45f, 0.25f), "Mars");
+        mars.a_au = a_mars;
+        mars.e = e_mars;
+        mars.i_rad = i_mars;
+        mars.omega_rad = omega_mars;
+        mars.Omega_rad = Omega_mars;
+        mars.M_rad = M_mars;
+        mars.mu = mu_sun;
         moonParents.add(5);
         planets.add(mars);
 
@@ -296,6 +327,13 @@ public class Main {
         double M_jupiter = L_jupiter - varpi_jupiter;
         Vector3d[] state_jupiter = getOrbitalState(a_jupiter, e_jupiter, i_jupiter, omega_jupiter, Omega_jupiter, M_jupiter, mu_sun);
         Planet jupiter = new Planet(state_jupiter[0], state_jupiter[1], 1.8982e27, 69911e3, new Vector3f(0.95f, 0.8f, 0.6f), "Jupiter");
+        jupiter.a_au = a_jupiter;
+        jupiter.e = e_jupiter;
+        jupiter.i_rad = i_jupiter;
+        jupiter.omega_rad = omega_jupiter;
+        jupiter.Omega_rad = Omega_jupiter;
+        jupiter.M_rad = M_jupiter;
+        jupiter.mu = mu_sun;
         moonParents.add(8);
         planets.add(jupiter);
 
@@ -339,6 +377,13 @@ public class Main {
         double M_saturn = L_saturn - varpi_saturn;
         Vector3d[] state_saturn = getOrbitalState(a_saturn, e_saturn, i_saturn, omega_saturn, Omega_saturn, M_saturn, mu_sun);
         Planet saturn = new Planet(state_saturn[0], state_saturn[1], 5.6834e26, 58232e3, new Vector3f(0.9f, 0.75f, 0.5f), "Saturn");
+        saturn.a_au = a_saturn;
+        saturn.e = e_saturn;
+        saturn.i_rad = i_saturn;
+        saturn.omega_rad = omega_saturn;
+        saturn.Omega_rad = Omega_saturn;
+        saturn.M_rad = M_saturn;
+        saturn.mu = mu_sun;
         moonParents.add(13);
         planets.add(saturn);
 
@@ -382,6 +427,13 @@ public class Main {
         double M_uranus = L_uranus - varpi_uranus;
         Vector3d[] state_uranus = getOrbitalState(a_uranus, e_uranus, i_uranus, omega_uranus, Omega_uranus, M_uranus, mu_sun);
         Planet uranus = new Planet(state_uranus[0], state_uranus[1], 8.6810e25, 25362e3, new Vector3f(0.4f, 0.7f, 0.8f), "Uranus");
+        uranus.a_au = a_uranus;
+        uranus.e = e_uranus;
+        uranus.i_rad = i_uranus;
+        uranus.omega_rad = omega_uranus;
+        uranus.Omega_rad = Omega_uranus;
+        uranus.M_rad = M_uranus;
+        uranus.mu = mu_sun;
         moonParents.add(18);
         planets.add(uranus);
 
@@ -396,6 +448,13 @@ public class Main {
         double M_neptune = L_neptune - varpi_neptune;
         Vector3d[] state_neptune = getOrbitalState(a_neptune, e_neptune, i_neptune, omega_neptune, Omega_neptune, M_neptune, mu_sun);
         Planet neptune = new Planet(state_neptune[0], state_neptune[1], 1.0243e26, 24622e3, new Vector3f(0.3f, 0.5f, 0.8f), "Neptune");
+        neptune.a_au = a_neptune;
+        neptune.e = e_neptune;
+        neptune.i_rad = i_neptune;
+        neptune.omega_rad = omega_neptune;
+        neptune.Omega_rad = Omega_neptune;
+        neptune.M_rad = M_neptune;
+        neptune.mu = mu_sun;
         moonParents.add(19);
         planets.add(neptune);
 
@@ -421,6 +480,13 @@ public class Main {
         double M_pluto = L_pluto - varpi_pluto;
         Vector3d[] state_pluto = getOrbitalState(a_pluto, e_pluto, i_pluto, omega_pluto, Omega_pluto, M_pluto, mu_sun);
         Planet pluto = new Planet(state_pluto[0], state_pluto[1], 1.303e22, 1188.3e3, new Vector3f(0.7f, 0.8f, 0.9f), "Pluto");
+        pluto.a_au = a_pluto;
+        pluto.e = e_pluto;
+        pluto.i_rad = i_pluto;
+        pluto.omega_rad = omega_pluto;
+        pluto.Omega_rad = Omega_pluto;
+        pluto.M_rad = M_pluto;
+        pluto.mu = mu_sun;
         moonParents.add(21);
         planets.add(pluto);
 
@@ -490,74 +556,66 @@ public class Main {
         precomputeNBodyOrbits();
     }
 
+    // Java
     private void precomputeNBodyOrbits() {
-        int numPoints = 720; // Number of points for orbit paths
+        int numPoints = 720;
         for (int i = 0; i < planets.size(); i++) {
             Planet p = planets.get(i);
-            if (p.name.isEmpty()||moonParents.get(i)==-1) continue; // Skip asteroids
+            if (p.name.isEmpty() || moonParents.get(i) == -1) continue; // Skip asteroids
 
-            // Estimate orbital period (Kepler’s 3rd law, approximate around Sun or parent)
-            double a_est = p.pos.length() / 1.495978707e11; // AU
-            double mu = mu_sun; // Default to Sun
             int parentIndex = moonParents.get(i);
-            if (parentIndex >= 0 && parentIndex < planets.size() && parentIndex != i) {
-                mu = G * planets.get(parentIndex).mass;
-                a_est = new Vector3d(p.pos).sub(planets.get(parentIndex).pos).length() / 1.495978707e11;
-            }
-            double period_years = Math.sqrt(a_est * a_est * a_est) * Math.sqrt(mu_sun / mu);
-            double period_sec = period_years * 3.15576e7; // Seconds per year
-            if (parentIndex >= 0 && parentIndex != i) {
-                period_sec = Math.min(period_sec, 30 * 86400); // Cap moon periods at ~30 days
-            }
-
-            double dt = period_sec / numPoints;
-            if (parentIndex >= 0 && parentIndex != i) {
-                dt *= ORBIT_DT_FACTOR; // Smaller time step for moons
-            }
+            boolean isMoon = (parentIndex >= 0 && parentIndex < planets.size() && parentIndex != i);
 
             List<Float> verts = new ArrayList<>();
-            List<Planet> clone = clonePlanets();
-            Vector3d fixedParentPos = (parentIndex >= 0 && parentIndex != i)
-                    ? new Vector3d(clone.get(parentIndex).pos)
-                    : null;
-            // Store initial position
-            Planet cp = clone.get(i);
-            Vector3d relPos = new Vector3d(cp.pos);
-            if (fixedParentPos != null) {
-                relPos.sub(fixedParentPos); // Relative to parent for moons
-            }
-            verts.add((float) (relPos.x * VIS_SCALE));
-            verts.add((float) (relPos.y * VIS_SCALE));
-            verts.add((float) (relPos.z * VIS_SCALE));
+            if (!isMoon) {
+                // Analytic Keplerian orbit for planets
+                for (int s = 0; s < numPoints; s++) {
+                    double M = 2 * Math.PI * s / numPoints;
+                    Vector3d[] state = getOrbitalState(
+                            p.a_au, p.e, p.i_rad, p.omega_rad, p.Omega_rad, M, p.mu
+                    );
+                    Vector3d pos = state[0];
+                    verts.add((float) (pos.x * VIS_SCALE));
+                    verts.add((float) (pos.y * VIS_SCALE));
+                    verts.add((float) (pos.z * VIS_SCALE));
+                }
+            } else {
+                // Keep integration for moons
+                double a_orbit = new Vector3d(p.pos).sub(planets.get(parentIndex).pos).length() / 1.495978707e11;
+                double mu = G * planets.get(parentIndex).mass;
+                double period_years = Math.sqrt(a_orbit * a_orbit * a_orbit * (mu_sun / mu));
+                double period_sec = period_years * 3.15576e7;
+                double dt = period_sec / numPoints * ORBIT_DT_FACTOR;
 
-            // Velocity Verlet integration for orbit precomputation
-            Vector3d[] acc = new Vector3d[clone.size()];
-            for (int j = 0; j < clone.size(); j++) acc[j] = new Vector3d();
-            for (int s = 0; s < numPoints - 1; s++) {
-                // Compute accelerations
-                computeAccelerations(clone, acc);
-                // Update positions
-                for (int j = 0; j < clone.size(); j++) {
-                    clone.get(j).pos.fma(dt, clone.get(j).vel).fma(0.5 * dt * dt, acc[j]);
-                }
-                // Compute new accelerations
-                Vector3d[] newAcc = new Vector3d[clone.size()];
-                for (int j = 0; j < clone.size(); j++) newAcc[j] = new Vector3d();
-                computeAccelerations(clone, newAcc);
-                // Update velocities
-                for (int j = 0; j < clone.size(); j++) {
-                    Planet pClone = clone.get(j);
-                    pClone.vel.fma(0.5 * dt, new Vector3d(acc[j]).add(newAcc[j]));
-                    acc[j].set(newAcc[j]);
-                }
-                // Store position for the body
-                cp = clone.get(i);
-                relPos.set(clone.get(i).pos);
-                if (fixedParentPos != null)
-                    relPos.sub(fixedParentPos);
+                List<Planet> clone = clonePlanets();
+                Vector3d fixedParentPos = new Vector3d(clone.get(parentIndex).pos);
+                Planet cp = clone.get(i);
+                Vector3d relPos = new Vector3d(cp.pos).sub(fixedParentPos);
                 verts.add((float) (relPos.x * VIS_SCALE));
                 verts.add((float) (relPos.y * VIS_SCALE));
                 verts.add((float) (relPos.z * VIS_SCALE));
+
+                Vector3d[] acc = new Vector3d[clone.size()];
+                for (int j = 0; j < clone.size(); j++) acc[j] = new Vector3d();
+                for (int s = 0; s < numPoints - 1; s++) {
+                    computeAccelerations(clone, acc);
+                    for (int j = 0; j < clone.size(); j++) {
+                        clone.get(j).pos.fma(dt, clone.get(j).vel).fma(0.5 * dt * dt, acc[j]);
+                    }
+                    Vector3d[] newAcc = new Vector3d[clone.size()];
+                    for (int j = 0; j < clone.size(); j++) newAcc[j] = new Vector3d();
+                    computeAccelerations(clone, newAcc);
+                    for (int j = 0; j < clone.size(); j++) {
+                        Planet pClone = clone.get(j);
+                        pClone.vel.fma(0.5 * dt, new Vector3d(acc[j]).add(newAcc[j]));
+                        acc[j].set(newAcc[j]);
+                    }
+                    cp = clone.get(i);
+                    relPos.set(clone.get(i).pos).sub(fixedParentPos);
+                    verts.add((float) (relPos.x * VIS_SCALE));
+                    verts.add((float) (relPos.y * VIS_SCALE));
+                    verts.add((float) (relPos.z * VIS_SCALE));
+                }
             }
             float[] nbodyVerts = new float[verts.size()];
             for (int v = 0; v < verts.size(); v++) nbodyVerts[v] = verts.get(v);
@@ -574,9 +632,10 @@ public class Main {
             nbodyOrbitVAOs.add(nbodyVAO);
             nbodyOrbitVBOs.add(nbodyVBO);
             nbodyOrbitCounts.add(numPoints);
-            nbodyOrbitColors.add(new Vector4f(p.color.x * 0.6f, p.color.y * 0.6f, p.color.z * 0.6f, 0.7f)); // 30% opacity
+            nbodyOrbitColors.add(new Vector4f(p.color.x * 0.6f, p.color.y * 0.6f, p.color.z * 0.6f, 0.7f));
         }
     }
+
 
     // Add new method for computing accelerations
     private void computeAccelerations(List<Planet> ps, Vector3d[] acc) {
@@ -615,24 +674,18 @@ public class Main {
         return clone;
     }
 
-    private Vector3d[] getOrbitalState(double a_au, double e, double i_deg, double omega_deg, double Omega_deg, double M_deg, double mu) {
+    // Java
+    private Vector3d[] getOrbitalState(double a_au, double e, double i_rad, double omega_rad, double Omega_rad, double M_rad, double mu) {
         double a = a_au * 1.495978707e11;
-        double M = Math.toRadians(M_deg);
-        double angle = Math.toRadians(Omega_deg + omega_deg);
-
+        double M = M_rad;
         double E = M;
         double tol = 1e-10;
         int maxIter = 50;
         for (int iter = 0; iter < maxIter; iter++) {
-            double sinE = Math.sin(E);
-            double cosE = Math.cos(E);
-            double f_val = E - e * sinE - M;
-            double f_der = 1 - e * cosE;
-            double dE = -f_val / f_der;
-            E += dE;
+            double dE = (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
+            E -= dE;
             if (Math.abs(dE) < tol) break;
         }
-
         double sqrt_term = Math.sqrt((1 + e) / (1 - e));
         double tan_E2 = Math.tan(E / 2);
         double f = 2 * Math.atan(sqrt_term * tan_E2);
@@ -647,13 +700,15 @@ public class Main {
         Vector3d r_peri = new Vector3d(r * cosf, 0, r * sinf);
         Vector3d v_peri = new Vector3d(-sinf, 0, e + cosf).mul(mu / h);
 
-        Matrix3d rot = new Matrix3d();
-        rot.rotateY(-angle);
+        Matrix3d rot = new Matrix3d()
+                .rotateY(Omega_rad)
+                .rotateX(i_rad)
+                .rotateY(omega_rad);
 
         Vector3d pos = new Vector3d();
-        r_peri.mul(rot, pos);
+        rot.transform(r_peri, pos);
         Vector3d vel = new Vector3d();
-        v_peri.mul(rot, vel);
+        rot.transform(v_peri, vel);
 
         return new Vector3d[]{pos, vel};
     }
@@ -796,13 +851,13 @@ public class Main {
         glUniform1i(numPlanetsLoc, planets.size());
 
         // Draw grid lines (semi-transparent) with dents
-        glUniform1i(useDentLoc, 1);
-        glBindVertexArray(gridVAO);
-        glUniformMatrix4fv(modelLoc, false, new Matrix4f().identity().get(fb));
-        glUniform3f(colorLoc, 0.0f, 0.0f, 0.0f);
-        glUniform4f(colorWithAlphaLoc, 0.9f, 0.9f, 0.9f, 0.1f);
-        glDrawArrays(GL_LINES, 0, gridVertexCount);
-        glBindVertexArray(0);
+        //glUniform1i(useDentLoc, 1);
+        //glBindVertexArray(gridVAO);
+        //glUniformMatrix4fv(modelLoc, false, new Matrix4f().identity().get(fb));
+        //glUniform3f(colorLoc, 0.0f, 0.0f, 0.0f);
+        //glUniform4f(colorWithAlphaLoc, 0.9f, 0.9f, 0.9f, 0.1f);
+        //glDrawArrays(GL_LINES, 0, gridVertexCount);
+        //glBindVertexArray(0);
 
         // Disable dents for other draws
         glUniform1i(useDentLoc, 0);
