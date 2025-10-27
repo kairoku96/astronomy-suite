@@ -3,8 +3,6 @@
 **A real-time, interactive 2D orbital mechanics simulator** built in Java Swing.  
 Accurately models **Keplerian orbits** using **Newton-Raphson** to solve the eccentric anomaly, with **moons**, **zoom**, **time scaling**, and **planet-following**.
 
-> **100% stable** – no drift, no wobble. Instant camera snap. Smooth interpolation.
-
 ---
 
 ## Features
@@ -12,13 +10,12 @@ Accurately models **Keplerian orbits** using **Newton-Raphson** to solve the ecc
 | Feature | Description |
 |-------|-----------|
 | **Keplerian Orbits** | Accurate elliptical paths using `E - e*sin(E) = M` |
-| **Moons** | Earth, Mars, Jupiter, Saturn, Uranus, Neptune with correct periods |
+| **Planets and Moons** | Earth, Mars, Jupiter, Saturn, Uranus, Neptune with correct periods |
 | **Dynamic Zoom** | Scroll to zoom from solar system to individual moons |
 | **Time Control** | `Ctrl+Scroll` to speed up/slow down simulation |
 | **Planet Following** | Click any planet to lock camera |
 | **HUD & Info Panel** | Real-time stats: distance, speed, period |
 | **Anti-aliased Rendering** | High-quality visuals with `RenderingHints` |
-| **No Drift** | Uses delta-time and modular arithmetic |
 
 ---
 
