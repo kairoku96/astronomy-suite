@@ -12,8 +12,8 @@ import java.awt.geom.Ellipse2D;
  *  - Dynamic zoom, time scaling, and interactive HUD.
  *  - Anti-aliased rendering with high visual quality.
  *
- * @author [Your Name]
- * @version 1.0
+ * @author Ethan Lin
+ * @version 1.1
  */
 public class SolarSystemSimulation extends JPanel
         implements ActionListener, MouseWheelListener, MouseListener {
