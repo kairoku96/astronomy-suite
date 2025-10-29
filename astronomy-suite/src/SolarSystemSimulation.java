@@ -2,6 +2,9 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.geom.Ellipse2D;
+import java.awt.geom.Path2D;
+import java.awt.geom.Point2D;
+import java.util.ArrayList;
 
 /**
  * Solar System Simulation – A real-time, interactive 2D orbital mechanics visualization.
@@ -49,31 +52,32 @@ public class SolarSystemSimulation extends JPanel
        ============================== */
     private static final String[] NAMES = {
             "Mercury", "Venus", "Earth", "Mars",
-            "Jupiter", "Saturn", "Uranus", "Neptune"
+            "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto"
     };
 
     // Semi-major axis in metres (a)
     private static final double[] A_METERS = {
             0.387*AU, 0.723*AU, AU, 1.524*AU,
-            5.203*AU, 9.537*AU, 19.191*AU, 30.07*AU
+            5.203*AU, 9.537*AU, 19.191*AU, 30.07*AU, 39.482*AU
     };
 
     // Orbital eccentricity (e)
     private static final double[] ECC = {
             0.2056, 0.0068, 0.0167, 0.0934,
-            0.0489, 0.0565, 0.0472, 0.0086
+            0.0489, 0.0565, 0.0472, 0.0086, 0.2488
     };
 
     // Orbital period in Earth years
     private static final double[] PERIOD_Y = {
             0.241, 0.615, 1.000, 1.881,
-            11.86, 29.46, 84.01, 164.8
+            11.86, 29.46, 84.01, 164.8, 247.94
     };
 
     // Planet radius in metres
     private static final double[] RADIUS_M = {
             2.439e6, 6.052e6, 6.371e6, 3.390e6,
-            6.9911e7, 5.8232e7, 2.5362e7, 2.4622e7
+            6.9911e7, 5.8232e7, 2.5362e7, 2.4622e7,
+            1.1883e6
     };
 
     private static final double SUN_RADIUS_M = 6.9634e8;  // Sun's radius in metres
@@ -82,7 +86,7 @@ public class SolarSystemSimulation extends JPanel
     private static final Color[] COLORS = {
             Color.GRAY, new Color(255,180,0), Color.CYAN, Color.RED,
             new Color(255,200,100), new Color(200,180,150),
-            new Color(150,200,255), new Color(100,150,255)
+            new Color(150,200,255), new Color(100,150,255), new Color(233, 226, 214)
     };
 
     /* ==============================
@@ -90,12 +94,13 @@ public class SolarSystemSimulation extends JPanel
        ============================== */
     // Orbital radii of moons around their parent planet (metres)
     private static final double[][] MOON_ORBIT_M = {
-            {}, {}, {384_400_000.0},                                      // Earth: Moon
+            {}, {}, {384_400_000.0},                                      // Earth: The Moon
             {9_377_000.0, 20_560_000.0},                                  // Mars: Phobos, Deimos
             {421_700_000.0, 671_000_000.0, 1_070_000_000.0, 1_883_000_000.0}, // Jupiter: Io, Europa, Ganymede, Callisto
             {1_221_830_000.0, 238_000_000.0, 527_000_000.0},               // Saturn: Titan, Enceladus, Rhea
             {436_300_000.0, 583_520_000.0, 498_900_000.0},                 // Uranus: Titania, Oberon, Umbriel
-            {356_000_000.0}                                               // Neptune: Triton
+            {356_000_000.0},                                               // Neptune: Triton
+            {}
     };
 
     // Moon orbital periods in Earth days
@@ -105,7 +110,7 @@ public class SolarSystemSimulation extends JPanel
             {1.77, 3.55, 7.15, 16.69},
             {16.69, 1.37, 2.74},
             {8.71, 13.46, 10.66},
-            {5.88}
+            {5.88}, {}
     };
 
     // Moon radius relative to parent planet
@@ -115,7 +120,7 @@ public class SolarSystemSimulation extends JPanel
             {0.25, 0.22, 0.30, 0.26},
             {0.40, 0.20, 0.25},
             {0.25, 0.20, 0.20},
-            {0.30}
+            {0.30}, {}
     };
 
     // Moon names
@@ -125,7 +130,7 @@ public class SolarSystemSimulation extends JPanel
             {"Io", "Europa", "Ganymede", "Callisto"},
             {"Titan", "Enceladus", "Rhea"},
             {"Titania", "Oberon", "Umbriel"},
-            {"Triton"}
+            {"Triton"}, {}
     };
 
     /* ==============================
@@ -133,6 +138,9 @@ public class SolarSystemSimulation extends JPanel
        ============================== */
     private final double[] meanAnomaly = new double[NAMES.length];     // M: mean anomaly (radians)
     private final double[][] moonAngle = new double[NAMES.length][];  // Angular position of each moon
+
+    private static final int ORBIT_RESOLUTION = 10000; // number of points per orbit path
+    private static final ArrayList<ArrayList<Point2D.Double>> orbitPaths = new ArrayList<>();
 
     // Current computed positions and velocities
     private final double[] planetX = new double[NAMES.length];        // x-position in metres
@@ -163,6 +171,23 @@ public class SolarSystemSimulation extends JPanel
             for (int m = 0; m < moonAngle[i].length; m++) {
                 moonAngle[i][m] = Math.random() * 2 * Math.PI;
             }
+        }
+
+        for (int i = 0; i < NAMES.length; i++) {
+            ArrayList<Point2D.Double> orbit = new ArrayList<>();
+            double a = A_METERS[i];
+            double e = ECC[i];
+            double b = a * Math.sqrt(1 - e * e);
+
+            // Step evenly in eccentric anomaly for smooth curve
+            for (int j = 0; j <= ORBIT_RESOLUTION; j++) {
+                double E = 2 * Math.PI * j / ORBIT_RESOLUTION;
+                double x = a * (Math.cos(E) - e);
+                double y = b * Math.sin(E);
+                orbit.add(new Point2D.Double(x, y));
+            }
+
+            orbitPaths.add(orbit);
         }
 
         // Start animation timer (~60 FPS)
@@ -259,7 +284,7 @@ public class SolarSystemSimulation extends JPanel
         } else {
             // Normal Scroll → Adjust zoom
             zoom = e.getWheelRotation() < 0 ? zoom * 1.1 : zoom / 1.1;
-            zoom = Math.max(0.05, Math.min(zoom, 1000));  // Clamp
+            zoom = Math.max(0.025, Math.min(zoom, 1000));  // Clamp
         }
     }
 
@@ -335,17 +360,28 @@ public class SolarSystemSimulation extends JPanel
             double pr = RADIUS_M[i] * METERS_TO_PIXELS * zoom;
             if (pr < 0.5) pr = 0.5;  // Minimum visible size
 
-            /* --- Orbital Path (Ellipse) --- */
-            double a = A_METERS[i];
-            double e = ECC[i];
-            double rx = a * METERS_TO_PIXELS * zoom;
-            double ry = a * Math.sqrt(1 - e * e) * METERS_TO_PIXELS * zoom;
-            double offsetX = a * e * METERS_TO_PIXELS * zoom;  // Focus offset
-            double orbX = cx - rx - offsetX - camX * METERS_TO_PIXELS * zoom;
-            double orbY = cy - ry - camY * METERS_TO_PIXELS * zoom;
+            /* --- Precomputed Orbit Path (smooth Path2D) --- */
+            ArrayList<Point2D.Double> orbit = orbitPaths.get(i);
+            Path2D.Double path = new Path2D.Double();
+
+            if (!orbit.isEmpty()) {
+                Point2D.Double first = orbit.getFirst();
+                double sx = cx + (first.x - camX) * METERS_TO_PIXELS * zoom;
+                double sy = cy + (first.y - camY) * METERS_TO_PIXELS * zoom;
+                path.moveTo(sx, sy);
+
+                for (int j = 1; j < orbit.size(); j++) {
+                    Point2D.Double p = orbit.get(j);
+                    double x = cx + (p.x - camX) * METERS_TO_PIXELS * zoom;
+                    double y = cy + (p.y - camY) * METERS_TO_PIXELS * zoom;
+                    path.lineTo(x, y);
+                }
+                path.closePath();
+            }
 
             g2.setColor(Color.DARK_GRAY);
-            g2.draw(new Ellipse2D.Double(orbX, orbY, 2 * rx, 2 * ry));
+            g2.setStroke(new BasicStroke(1f));
+            g2.draw(path);
 
             /* --- Planet Body --- */
             g2.setColor(COLORS[i]);
@@ -384,7 +420,7 @@ public class SolarSystemSimulation extends JPanel
             }
 
             /* --- Moons (only visible at high zoom) --- */
-            if (zoom > 100 && MOON_NAMES[i].length > 0) {
+            if (zoom > 30 && MOON_NAMES[i].length > 0) {
                 g2.setColor(Color.LIGHT_GRAY);
                 for (int m = 0; m < MOON_NAMES[i].length; m++) {
                     double r = MOON_ORBIT_M[i][m];
