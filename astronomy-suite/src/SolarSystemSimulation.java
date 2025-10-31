@@ -80,6 +80,8 @@ public class SolarSystemSimulation extends JPanel
     private double currentZoom = 1.0;
     /** Speed of zoom interpolation (higher = faster) */
     private static final double ZOOM_SPEED = 10.0;
+    private int zoomMode = 0;                   // 0=Planet, 1=Orbit, 2=Manual
+    private static final String[] ZOOM_MODE_NAMES = {"Planet", "Orbit", "Manual"};
 
     // ----- Orbit visibility thresholds -----
     /** Zoom level at which orbits become visible */
@@ -260,6 +262,11 @@ public class SolarSystemSimulation extends JPanel
     private final double[] planetSpeedKmS = new double[NAMES.length];
 
     /* ==============================
+   SHADING SYSTEM
+   ============================== */
+    private boolean shadingEnabled = true;
+
+    /* ==============================
        CONSTRUCTOR
        ============================== */
     /**
@@ -326,13 +333,22 @@ public class SolarSystemSimulation extends JPanel
             moonOrbitPaths.add(moonOrbits);
         }
 
-        // Key listener: Z toggles auto-zoom
+        // Key listener: Z toggles auto-zoom, S toggles shadows
         setFocusable(true);
         addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() == KeyEvent.VK_Z) {
+                int code = e.getKeyCode();
+                if (code == KeyEvent.VK_Z) {
                     autoZoomEnabled = !autoZoomEnabled;
                     if (!autoZoomEnabled) targetZoom = currentZoom;
+                } else if (code == KeyEvent.VK_X) {
+                    // Cycle zoom mode: Planet → Orbit → Manual → ...
+                    if (followingPlanet && cameraFocusIndex >= 0) {
+                        zoomMode = (zoomMode + 1) % 3;
+                        updateAutoZoomTarget(); // Recompute zoom based on new mode
+                    }
+                } else if (code == KeyEvent.VK_S) {
+                    shadingEnabled = !shadingEnabled;
                 }
             }
         });
@@ -395,7 +411,7 @@ public class SolarSystemSimulation extends JPanel
 
         /* ----- CAMERA & AUTO-ZOOM ----- */
         if (followingMoon && cameraFocusIndex >= 0 && cameraFocusMoon >= 0) {
-            // [Moon Camera Logic] – follows selected moon
+            /* ---------- MOON FOLLOWING ---------- */
             int p = cameraFocusIndex, m = cameraFocusMoon;
             double a = MOON_A_M[p][m], e = MOON_ECC[p][m], b = a * Math.sqrt(1 - e * e);
             double M = moonMean[p][m];
@@ -433,7 +449,7 @@ public class SolarSystemSimulation extends JPanel
             }
             camX = moonCamX; camY = moonCamY;
 
-            // Auto-zoom to fit moon
+            /* moon auto-zoom (unchanged) */
             if (autoZoomEnabled) {
                 double moonRadius = MOON_RADIUS_M[p][m];
                 double maxRadius = moonRadius * 1.5;
@@ -444,7 +460,7 @@ public class SolarSystemSimulation extends JPanel
             }
 
         } else if (followingPlanet && cameraFocusIndex >= 0) {
-            // [Planet Camera Logic]
+            /* ---------- PLANET FOLLOWING ---------- */
             double targetX = planetX[cameraFocusIndex];
             double targetY = planetY[cameraFocusIndex];
             double dx = targetX - camX;
@@ -465,21 +481,13 @@ public class SolarSystemSimulation extends JPanel
                 camX = targetX; camY = targetY;
             }
 
-            // Auto-zoom to fit planet + moons
+            /* ---------- AUTO-ZOOM (Planet / Orbit / Manual) ---------- */
             if (autoZoomEnabled) {
-                double maxRadius = RADIUS_M[cameraFocusIndex];
-                for (int m = 0; m < MOON_A_M[cameraFocusIndex].length; m++) {
-                    double moonDist = MOON_A_M[cameraFocusIndex][m] * 1.1;
-                    if (moonDist > maxRadius) maxRadius = moonDist;
-                }
-                int screen = Math.min(getWidth(), getHeight());
-                double desired = screen * 0.6;
-                targetZoom = desired / (maxRadius * METERS_TO_PIXELS * 2);
-                targetZoom = Math.max(5.0, Math.min(targetZoom, 5000.0));
+                updateAutoZoomTarget();               // <-- NEW CALL
             }
 
         } else {
-            // [No Follow] – smoothly return to Sun
+            /* ---------- NO FOLLOW – return to Sun ---------- */
             double speed = 8.0;
             double lerp = 1 - Math.exp(-speed * dtReal);
             camX *= (1 - lerp);
@@ -488,10 +496,10 @@ public class SolarSystemSimulation extends JPanel
 
             targetZoom = 1.0;
             cameraIsApproaching = moonCameraIsApproaching = false;
-            autoZoomEnabled = false;
+            autoZoomEnabled = false;                 // auto-zoom off when not following
         }
 
-        // Smooth zoom interpolation
+        /* ----- SMOOTH ZOOM INTERPOLATION ----- */
         if (autoZoomEnabled) {
             double lerp = 1 - Math.exp(-ZOOM_SPEED * dtReal);
             currentZoom += (targetZoom - currentZoom) * lerp;
@@ -513,7 +521,7 @@ public class SolarSystemSimulation extends JPanel
             // Normal scroll: zoom
             double factor = e.getWheelRotation() < 0 ? 1.1 : 1/1.1;
             currentZoom *= factor;
-            currentZoom = Math.max(0.1, Math.min(currentZoom, 1000));
+            currentZoom = Math.max(0.04, Math.min(currentZoom, 50000));
             targetZoom = currentZoom;
         }
     }
@@ -592,8 +600,10 @@ public class SolarSystemSimulation extends JPanel
                     selectedMoon = -1;
                     cameraIsApproaching = false;
                     moonCameraIsApproaching = false;
+                    autoZoomEnabled = false;
                 } else {
                     // Follow planet
+                    autoZoomEnabled = true;
                     followingPlanet = true;
                     followingMoon = false;
                     cameraIsApproaching = true;
@@ -611,6 +621,7 @@ public class SolarSystemSimulation extends JPanel
         cameraFocusIndex = cameraFocusMoon = -1;
         selectedPlanet = selectedMoon = -1;
         cameraIsApproaching = moonCameraIsApproaching = false;
+        currentZoom = 1.0;
     }
 
     @Override public void mouseClicked(MouseEvent e) { handleClick(e.getX(), e.getY()); }
@@ -658,7 +669,15 @@ public class SolarSystemSimulation extends JPanel
 
             // Draw planet body
             g2.setColor(COLORS[i]);
-            g2.fill(new Ellipse2D.Double(px - pr, py - pr, 2*pr, 2*pr));
+            Ellipse2D.Double planetEllipse = new Ellipse2D.Double(px - pr, py - pr, 2*pr, 2*pr);
+
+            // Draw base color
+            g2.fill(planetEllipse);
+
+            // Apply shading if enabled
+            if (shadingEnabled && pr > 3) {
+                drawRealisticShading(g2, planetX[i], planetY[i], pr, cx, cy);
+            }
 
             // Draw label with overlap avoidance
             g2.setColor(Color.WHITE);
@@ -733,8 +752,14 @@ public class SolarSystemSimulation extends JPanel
                         double mpy = cy + (moonWorldY - camY) * METERS_TO_PIXELS * currentZoom;
                         double mr = Math.max(RADIUS_M[i] * MOON_SIZE_RATIO[i][m] * METERS_TO_PIXELS * currentZoom, 0.6);
 
+                        // Base moon
                         g2.setColor(Color.LIGHT_GRAY);
                         g2.fill(new Ellipse2D.Double(mpx - mr, mpy - mr, 2*mr, 2*mr));
+
+                        // Shading for moon
+                        if (shadingEnabled && mr > 2) {
+                            drawRealisticShading(g2, moonWorldX, moonWorldY, mr, cx, cy);
+                        }
 
                         g2.setColor(Color.WHITE);
                         g2.drawString(MOON_NAMES[i][m], (int)(mpx + mr + 4), (int)(mpy - mr - 2));
@@ -768,7 +793,11 @@ public class SolarSystemSimulation extends JPanel
         } else {
             g2.drawString("Scroll=Zoom | Ctrl+Scroll=Speed | Click=Follow", 10, 85);
         }
-        g2.drawString("Z=Toggle Auto-Zoom When Selecting Planet/Moon", 10, 125);
+        g2.drawString("Z=Auto-Zoom: " + (autoZoomEnabled ? "ON" : "OFF"), 10, 125);
+        if (followingPlanet && cameraFocusIndex >= 0) {
+            g2.drawString("X=Cycle Zoom: " + ZOOM_MODE_NAMES[zoomMode], 10, 145);
+        }
+        g2.drawString("S=Shading: " + (shadingEnabled ? "ON" : "OFF"), 10, 165);
 
         // Info panel
         if (selectedPlanet != -1) {
@@ -822,6 +851,87 @@ public class SolarSystemSimulation extends JPanel
         double x = xr * Math.cos(omega + Omega) - yr * Math.sin(omega + Omega);
         double y = xr * Math.sin(omega + Omega) + yr * Math.cos(omega + Omega);
         return new Point2D.Double(x, y);
+    }
+
+    /**
+     * Realistic directional shading: full gradient from lit to dark side.
+     * Light source: Sun at (0,0).
+     */
+    private void drawRealisticShading(Graphics2D g2, double worldX, double worldY,
+                                      double radiusPx, int cx, int cy) {
+        if (radiusPx < 2) return;
+
+        double centerX = cx + (worldX - camX) * METERS_TO_PIXELS * currentZoom;
+        double centerY = cy + (worldY - camY) * METERS_TO_PIXELS * currentZoom;
+
+        // Light direction: from body to Sun
+        double lightX = -worldX;
+        double lightY = -worldY;
+        double distToSun = Math.hypot(lightX, lightY);
+        if (distToSun == 0) return;
+        lightX /= distToSun;
+        lightY /= distToSun;
+
+        // Clip to body
+        Ellipse2D.Double clip = new Ellipse2D.Double(
+                centerX - radiusPx, centerY - radiusPx, 2 * radiusPx, 2 * radiusPx);
+        g2.setClip(clip);
+
+        // Narrow gradient range for sharp transition
+        float brightX = (float)(centerX + lightX * radiusPx * 1.0f);
+        float brightY = (float)(centerY + lightY * radiusPx * 1.0f);
+        float darkX   = (float)(centerX - lightX * radiusPx * 0.25f);
+        float darkY   = (float)(centerY - lightY * radiusPx * 0.25f);
+
+        // HIGHLIGHT: semi-transparent white (overlays on base color)
+        // SHADOW: 100% opaque black
+        Color HIGHLIGHT = new Color(255, 255, 255, 140);  // reduced alpha slightly for subtlety
+        Color SHADOW    = new Color(0, 0, 0, 255);        // FULLY OPAQUE BLACK
+
+        GradientPaint gp = new GradientPaint(
+                brightX, brightY, HIGHLIGHT,
+                darkX,   darkY,   SHADOW
+        );
+        g2.setPaint(gp);
+        g2.fill(clip);
+
+        // Optional: subtle rim highlight
+        g2.setColor(new Color(255, 255, 255, 40));
+        g2.setStroke(new BasicStroke(1.5f));
+        g2.draw(clip);
+
+        g2.setClip(null);
+    }
+
+
+    /** Re-calculates targetZoom according to the current zoomMode */
+    private void updateAutoZoomTarget() {
+        if (cameraFocusIndex < 0 || followingMoon) return;
+
+        int i = cameraFocusIndex;
+        int screen = Math.min(getWidth(), getHeight());
+        double desired = screen * 0.6;               // fill 60 % of the smaller side
+
+        double maxRadius;
+
+        if (zoomMode == 0) {                         // 0 = Planet + moons
+            maxRadius = RADIUS_M[i];
+            targetZoom = desired / (maxRadius * METERS_TO_PIXELS * 2);
+            targetZoom = Math.max(5.0, Math.min(targetZoom, 5000.0));
+
+        } else if (zoomMode == 1) {                  // 1 = Whole orbit
+            maxRadius = RADIUS_M[i];
+            for (int m = 0; m < MOON_A_M[i].length; m++) {
+                double moonDist = MOON_A_M[i][m] * 1.2;
+                if (moonDist > maxRadius) maxRadius = moonDist;
+            }
+            targetZoom = desired / (maxRadius * METERS_TO_PIXELS * 2);
+            targetZoom = Math.max(5.0, Math.min(targetZoom, 5000.0));
+
+        } else {                                     // 2 = Manual – keep current
+            targetZoom = currentZoom;
+            autoZoomEnabled = false;
+        }
     }
 
     /* ==============================
