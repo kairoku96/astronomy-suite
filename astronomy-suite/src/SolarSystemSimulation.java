@@ -1,6 +1,7 @@
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.awt.geom.AffineTransform;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
@@ -155,9 +156,15 @@ public class SolarSystemSimulation extends JPanel
 
     /** Visual color for each planet */
     private static final Color[] COLORS = {
-            Color.GRAY, new Color(255,180,0), Color.CYAN, Color.RED,
-            new Color(255,200,100), new Color(200,180,150),
-            new Color(150,200,255), new Color(100,150,255), new Color(233,226,214)
+            new Color(169, 169, 169),   // Mercury – dark gray, rocky
+            new Color(210, 180, 140),   // Venus – pale tan/yellowish beige
+            new Color(81, 150, 208),    // Earth – bluish with some green tones
+            new Color(188, 39, 50),     // Mars – reddish ochre
+            new Color(255, 204, 102),   // Jupiter – light orange-brown (cloud bands)
+            new Color(194, 178, 128),   // Saturn – muted golden tan
+            new Color(173, 216, 230),   // Uranus – light cyan with a hint of green
+            new Color(72, 118, 255),    // Neptune – deep azure blue
+            new Color(233, 226, 214)    // Pluto – pale off-white/icy beige
     };
 
     /* ==============================
@@ -246,7 +253,7 @@ public class SolarSystemSimulation extends JPanel
     private final double[][] moonMean = new double[NAMES.length][];
 
     /** Number of points to use when drawing orbits */
-    private static final int ORBIT_RESOLUTION = 2000;
+    private static final int ORBIT_RESOLUTION = 10000;
 
     /** Precomputed orbit paths for planets (in planet-local coords) */
     private final ArrayList<ArrayList<Point2D.Double>> orbitPaths = new ArrayList<>();
@@ -601,6 +608,7 @@ public class SolarSystemSimulation extends JPanel
                     cameraIsApproaching = false;
                     moonCameraIsApproaching = false;
                     autoZoomEnabled = false;
+                    currentZoom = 1.0;
                 } else {
                     // Follow planet
                     autoZoomEnabled = true;
@@ -667,6 +675,45 @@ public class SolarSystemSimulation extends JPanel
             g2.setStroke(new BasicStroke(1f));
             g2.draw(path);
 
+            if (i == 5) {  // Saturn
+                //Ring parameters
+                double[] innerFactors = {1.1351, 2.075, 2.52, 1.55, 1.0};
+                double[] outerFactors = {2.0, 2.4795, 2.65, 1.7, 1.495};
+                Color[] colors = {
+                        new Color(152, 135, 107, 180),
+                        new Color(104, 92, 73, 180),
+                        new Color(104, 92, 73, 180),
+                        new Color(42, 37, 30, 180),
+                        new Color(42, 37, 30, 180)
+                };
+
+                //Transform & rotate for Saturn’s axial tilt
+                AffineTransform old = g2.getTransform();
+                g2.translate(px, py);
+                g2.rotate(Math.toRadians(26.7));
+                g2.setComposite(AlphaComposite.SrcOver);
+
+                //Draw all Rings
+                for (int r = 0; r < innerFactors.length; r++) {
+                    double innerAU = RADIUS_M[i] / AU * innerFactors[r];
+                    double outerAU = RADIUS_M[i] / AU * outerFactors[r];
+                    double innerPx = innerAU * AU * METERS_TO_PIXELS * currentZoom;
+                    double outerPx = outerAU * AU * METERS_TO_PIXELS * currentZoom;
+
+                    g2.setColor(colors[r]);
+                    g2.setStroke(new BasicStroke(
+                            (float) ((outerPx - innerPx) * 0.6f),
+                            BasicStroke.CAP_BUTT,
+                            BasicStroke.JOIN_ROUND
+                    ));
+                    g2.draw(new Ellipse2D.Double(-outerPx, -outerPx, outerPx * 2, outerPx * 2));
+                }
+
+                //Restore Transform
+                g2.setTransform(old);
+            }
+
+
             // Draw planet body
             g2.setColor(COLORS[i]);
             Ellipse2D.Double planetEllipse = new Ellipse2D.Double(px - pr, py - pr, 2*pr, 2*pr);
@@ -676,7 +723,7 @@ public class SolarSystemSimulation extends JPanel
 
             // Apply shading if enabled
             if (shadingEnabled && pr > 3) {
-                drawRealisticShading(g2, planetX[i], planetY[i], pr, cx, cy);
+                drawRealisticShading(g2, planetX[i], planetY[i], pr, cx, cy, i);
             }
 
             // Draw label with overlap avoidance
@@ -758,7 +805,7 @@ public class SolarSystemSimulation extends JPanel
 
                         // Shading for moon
                         if (shadingEnabled && mr > 2) {
-                            drawRealisticShading(g2, moonWorldX, moonWorldY, mr, cx, cy);
+                            drawRealisticShading(g2, moonWorldX, moonWorldY, mr, cx, cy, -1);
                         }
 
                         g2.setColor(Color.WHITE);
@@ -858,7 +905,7 @@ public class SolarSystemSimulation extends JPanel
      * Light source: Sun at (0,0).
      */
     private void drawRealisticShading(Graphics2D g2, double worldX, double worldY,
-                                      double radiusPx, int cx, int cy) {
+                                      double radiusPx, int cx, int cy, int index) {
         if (radiusPx < 2) return;
 
         double centerX = cx + (worldX - camX) * METERS_TO_PIXELS * currentZoom;
@@ -873,19 +920,23 @@ public class SolarSystemSimulation extends JPanel
         lightY /= distToSun;
 
         // Clip to body
-        Ellipse2D.Double clip = new Ellipse2D.Double(
-                centerX - radiusPx, centerY - radiusPx, 2 * radiusPx, 2 * radiusPx);
-        g2.setClip(clip);
+        Ellipse2D.Double fillEllipse =
+                new Ellipse2D.Double(centerX - radiusPx - 1, centerY - radiusPx - 1, 2*(radiusPx + 1), 2*(radiusPx + 1));
+        g2.fill(fillEllipse);
 
         // Narrow gradient range for sharp transition
         float brightX = (float)(centerX + lightX * radiusPx * 1.0f);
         float brightY = (float)(centerY + lightY * radiusPx * 1.0f);
-        float darkX   = (float)(centerX - lightX * radiusPx * 0.25f);
-        float darkY   = (float)(centerY - lightY * radiusPx * 0.25f);
+        float darkX   = (float)(centerX - lightX * radiusPx * 0.2f);
+        float darkY   = (float)(centerY - lightY * radiusPx * 0.2f);
 
         // HIGHLIGHT: semi-transparent white (overlays on base color)
         // SHADOW: 100% opaque black
-        Color HIGHLIGHT = new Color(255, 255, 255, 140);  // reduced alpha slightly for subtlety
+        Color HIGHLIGHT;
+        if (index == -1)
+            HIGHLIGHT = new Color(Color.lightGray.getRed(), Color.lightGray.getGreen(), Color.lightGray.getBlue(), 140);  // reduced alpha slightly for subtlety
+        else
+            HIGHLIGHT = new Color(COLORS[index].getRed(), COLORS[index].getGreen(), COLORS[index].getBlue(), 140);
         Color SHADOW    = new Color(0, 0, 0, 255);        // FULLY OPAQUE BLACK
 
         GradientPaint gp = new GradientPaint(
@@ -893,12 +944,12 @@ public class SolarSystemSimulation extends JPanel
                 darkX,   darkY,   SHADOW
         );
         g2.setPaint(gp);
-        g2.fill(clip);
+        g2.fill(fillEllipse);
 
         // Optional: subtle rim highlight
         g2.setColor(new Color(255, 255, 255, 40));
         g2.setStroke(new BasicStroke(1.5f));
-        g2.draw(clip);
+        g2.draw(fillEllipse);
 
         g2.setClip(null);
     }
