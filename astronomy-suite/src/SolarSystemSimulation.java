@@ -1210,7 +1210,7 @@ public class SolarSystemSimulation extends JPanel
        MAIN
        ============================== */
     public static void main(String[] args) {
-        JFrame frame = new JFrame("Solar System Simulation – Textures & Smooth Unfollow (N-body available)");
+        JFrame frame = new JFrame("Solar System Simulation");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.add(new SolarSystemSimulation());
         frame.pack();
