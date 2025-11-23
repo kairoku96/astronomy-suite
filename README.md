@@ -21,9 +21,9 @@ Accurately models **Keplerian orbits** using **Newton-Raphson** to solve the ecc
 
 ## Screenshots
 
-| Overview | Earth & Moon (Zoomed) | Jupiter & Moons |
+| Overview | Earth & Moon (Zoomed) | Saturn & Moons |
 |--------|------------------------|-----------------|
-| ![Solar System Overview](astronomy-suite/screenshots/overview.png) | ![Earth Moon Zoom](astronomy-suite/screenshots/earth-moon-zoom.png) | ![Jupiter Moons](astronomy-suite/screenshots/jupiter-moons.png) |
+| ![Solar System Overview](astronomy-suite/screenshots/overview.png) | ![Earth Moon Zoom](astronomy-suite/screenshots/earth-moon-zoom.png) | ![Saturn Moons](astronomy-suite/screenshots/saturn-moons.png) |
 
 ---
 
