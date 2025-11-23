@@ -22,8 +22,12 @@ import java.util.ArrayList;
  *   <li>Orbit path rendering and dynamic HUD</li>
  * </ul>
  *
- * @author Ethan Lin (original)
- * @version 2.0
+ * N-body mode (toggle with 'N') replaces the Kepler update with a velocity-Verlet
+ * integrator that accounts for mutual gravitational attraction between planets
+ * and the central Sun (Sun is fixed at origin).
+ *
+ * @author Ethan Lin (original) + N-body integration by ChatGPT
+ * @version 3.0
  */
 public class SolarSystemSimulation extends JPanel
         implements ActionListener, MouseWheelListener, MouseListener {
@@ -269,6 +273,36 @@ public class SolarSystemSimulation extends JPanel
     private final double[] planetSpeedKmS = new double[NAMES.length];
 
     /* ==============================
+       N-BODY EXTENSIONS
+       ============================== */
+    /** Whether N-body mode is active (toggle with 'N') */
+    private boolean nBodyEnabled = false;
+
+    /** Planet masses in kg (realistic values) */
+    private final double[] bodyMass = new double[] {
+            3.3011e23,   // Mercury
+            4.8675e24,   // Venus
+            5.97237e24,  // Earth
+            6.4171e23,   // Mars
+            1.8982e27,   // Jupiter
+            5.6834e26,   // Saturn
+            8.6810e25,   // Uranus
+            1.02413e26,  // Neptune
+            1.303e22     // Pluto
+    };
+
+    /** Velocities (m/s) */
+    private final double[] vx = new double[NAMES.length];
+    private final double[] vy = new double[NAMES.length];
+
+    /** Accelerations (m/s^2) - reused per-step */
+    private final double[] ax = new double[NAMES.length];
+    private final double[] ay = new double[NAMES.length];
+
+    /** Alive flags (false after merged) */
+    private final boolean[] alive = new boolean[NAMES.length];
+
+    /* ==============================
    SHADING SYSTEM
    ============================== */
     private boolean shadingEnabled = true;
@@ -299,6 +333,9 @@ public class SolarSystemSimulation extends JPanel
             planetX[i] = pos.x;
             planetY[i] = pos.y;
             planetDistM[i] = Math.hypot(pos.x, pos.y);
+
+            // Mark alive
+            alive[i] = true;
         }
 
         // Initialize moon mean anomaly arrays
@@ -340,7 +377,10 @@ public class SolarSystemSimulation extends JPanel
             moonOrbitPaths.add(moonOrbits);
         }
 
-        // Key listener: Z toggles auto-zoom, S toggles shadows
+        // Initialize velocities consistent with current Kepler positions (approximate tangential)
+        initializeVelocitiesFromKepler();
+
+        // Key listener: Z toggles auto-zoom, S toggles shadows, N toggles n-body
         setFocusable(true);
         addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent e) {
@@ -356,6 +396,10 @@ public class SolarSystemSimulation extends JPanel
                     }
                 } else if (code == KeyEvent.VK_S) {
                     shadingEnabled = !shadingEnabled;
+                } else if (code == KeyEvent.VK_N) {
+                    nBodyEnabled = !nBodyEnabled;
+                    System.out.println("N-body simulation: " + nBodyEnabled);
+                    // If turning on N-body, keep velocities as initialized; if turning off, reset Kepler mean anomalies to match current positions?
                 }
             }
         });
@@ -381,39 +425,102 @@ public class SolarSystemSimulation extends JPanel
         double dtSim = dtReal * timeScale;        // Simulated delta time
         simTimeSec += dtSim;
 
-        // Update planet mean anomalies
-        for (int i = 0; i < NAMES.length; i++) {
-            double periodSec = PERIOD_Y[i] * 365.25 * DAY;
-            double n = 2 * Math.PI / periodSec;   // Mean motion
-            meanAnomaly[i] = (meanAnomaly[i] + n * dtSim) % (2 * Math.PI);
-        }
+        // Update planet mean anomalies (only used in Kepler mode)
+        if (!nBodyEnabled) {
+            for (int i = 0; i < NAMES.length; i++) {
+                double periodSec = PERIOD_Y[i] * 365.25 * DAY;
+                double n = 2 * Math.PI / periodSec;   // Mean motion
+                meanAnomaly[i] = (meanAnomaly[i] + n * dtSim) % (2 * Math.PI);
+            }
 
-        // Update moon mean anomalies
-        for (int i = 0; i < NAMES.length; i++) {
-            for (int m = 0; m < moonMean[i].length; m++) {
-                double periodSec = MOON_PERIOD_DAYS[i][m] * DAY;
-                double n = 2 * Math.PI / periodSec;
-                moonMean[i][m] = (moonMean[i][m] + n * dtSim) % (2 * Math.PI);
+            // Update moon mean anomalies
+            for (int i = 0; i < NAMES.length; i++) {
+                for (int m = 0; m < moonMean[i].length; m++) {
+                    double periodSec = MOON_PERIOD_DAYS[i][m] * DAY;
+                    double n = 2 * Math.PI / periodSec;
+                    moonMean[i][m] = (moonMean[i][m] + n * dtSim) % (2 * Math.PI);
+                }
+            }
+        } else {
+            // When in N-body, advance moon mean anomalies to keep label positions consistent (not physically necessary)
+            for (int i = 0; i < NAMES.length; i++) {
+                for (int m = 0; m < moonMean[i].length; m++) {
+                    double periodSec = MOON_PERIOD_DAYS[i][m] * DAY;
+                    double n = 2 * Math.PI / periodSec;
+                    moonMean[i][m] = (moonMean[i][m] + n * dtSim) % (2 * Math.PI);
+                }
             }
         }
 
-        // Solve Kepler's equation for planet positions
-        for (int i = 0; i < NAMES.length; i++) {
-            double a = A_METERS[i], e = ECC[i], b = a * Math.sqrt(1 - e * e);
-            double M = meanAnomaly[i];
-            double E = M;
-            for (int it = 0; it < 40; it++) {
-                double f = E - e * Math.sin(E) - M;
-                double fp = 1 - e * Math.cos(E);
-                E -= f / fp;
-                if (Math.abs(f) < 1e-12) break;
+        // Update positions either via Kepler solver or N-body integrator
+        if (!nBodyEnabled) {
+            // Solve Kepler's equation for planet positions (original)
+            for (int i = 0; i < NAMES.length; i++) {
+                double a = A_METERS[i], e = ECC[i], b = a * Math.sqrt(1 - e * e);
+                double M = meanAnomaly[i];
+                double E = M;
+                for (int it = 0; it < 40; it++) {
+                    double f = E - e * Math.sin(E) - M;
+                    double fp = 1 - e * Math.cos(E);
+                    E -= f / fp;
+                    if (Math.abs(f) < 1e-12) break;
+                }
+                double x = a * (Math.cos(E) - e);
+                double y = b * Math.sin(E);
+                planetX[i] = x; planetY[i] = y;
+                planetDistM[i] = Math.hypot(x, y);
+                double v = Math.sqrt(G * M_SUN * (2 / planetDistM[i] - 1 / a));
+                planetSpeedKmS[i] = v / 1_000.0;
+
+                // Keep velocities consistent (approx) so toggling to N-body is smoother
+                double theta = Math.atan2(y, x);
+                vx[i] = -v * Math.sin(theta);
+                vy[i] =  v * Math.cos(theta);
             }
-            double x = a * (Math.cos(E) - e);
-            double y = b * Math.sin(E);
-            planetX[i] = x; planetY[i] = y;
-            planetDistM[i] = Math.hypot(x, y);
-            double v = Math.sqrt(G * M_SUN * (2 / planetDistM[i] - 1 / a));
-            planetSpeedKmS[i] = v / 1_000.0;
+        } else {
+            // ---------- N-BODY NEWTONIAN GRAVITY (velocity-Verlet) ----------
+
+            // Compute accelerations at current positions (due to Sun + mutual)
+            computeAccelerations(ax, ay);
+
+            // First half velocity update
+            for (int i = 0; i < NAMES.length; i++) {
+                if (!alive[i]) continue;
+                vx[i] += 0.5 * ax[i] * dtSim;
+                vy[i] += 0.5 * ay[i] * dtSim;
+            }
+
+            // Position update
+            for (int i = 0; i < NAMES.length; i++) {
+                if (!alive[i]) continue;
+                planetX[i] += vx[i] * dtSim;
+                planetY[i] += vy[i] * dtSim;
+            }
+
+            // Recompute accelerations at new positions
+            computeAccelerations(ax, ay);
+
+            // Second half velocity update
+            for (int i = 0; i < NAMES.length; i++) {
+                if (!alive[i]) continue;
+                vx[i] += 0.5 * ax[i] * dtSim;
+                vy[i] += 0.5 * ay[i] * dtSim;
+            }
+
+            // Update distances/speeds for HUD
+            for (int i = 0; i < NAMES.length; i++) {
+                if (!alive[i]) {
+                    planetDistM[i] = Double.NaN;
+                    planetSpeedKmS[i] = 0;
+                    continue;
+                }
+                planetDistM[i] = Math.hypot(planetX[i], planetY[i]);
+                double vmag = Math.hypot(vx[i], vy[i]);
+                planetSpeedKmS[i] = vmag / 1_000.0;
+            }
+
+            // Collision handling: simple merging if two alive bodies overlap
+            handleCollisions();
         }
 
         /* ----- CAMERA & AUTO-ZOOM ----- */
@@ -522,11 +629,11 @@ public class SolarSystemSimulation extends JPanel
     public void mouseWheelMoved(MouseWheelEvent e) {
         if (e.isControlDown()) {
             // Ctrl+Scroll: adjust time scale
-            timeScale = e.getWheelRotation() < 0 ? timeScale * 2 : timeScale / 2;
+            timeScale = e.getPreciseWheelRotation() < 0 ? timeScale * 2 : timeScale / 2;
             timeScale = Math.max(1, Math.min(timeScale, 1e9));
         } else {
             // Normal scroll: zoom
-            double factor = e.getWheelRotation() < 0 ? 1.1 : 1/1.1;
+            double factor = e.getPreciseWheelRotation() < 0 ? 1.1 : 1/1.1;
             currentZoom *= factor;
             currentZoom = Math.max(0.04, Math.min(currentZoom, 50000));
             targetZoom = currentZoom;
@@ -592,6 +699,7 @@ public class SolarSystemSimulation extends JPanel
 
         // PLANET CLICK
         for (int i = 0; i < NAMES.length; i++) {
+            if (!alive[i]) continue;
             double px = cx + (planetX[i] - camX) * METERS_TO_PIXELS * currentZoom;
             double py = cy + (planetY[i] - camY) * METERS_TO_PIXELS * currentZoom;
             double pr = Math.max(RADIUS_M[i] * METERS_TO_PIXELS * currentZoom, 4);
@@ -663,20 +771,21 @@ public class SolarSystemSimulation extends JPanel
 
         // Draw planets and moons
         for (int i = 0; i < NAMES.length; i++) {
+            if (!alive[i]) continue; // skip merged/deactivated bodies visually
+
             double worldX = planetX[i], worldY = planetY[i];
             double px = cx + (worldX - camX) * METERS_TO_PIXELS * currentZoom;
             double py = cy + (worldY - camY) * METERS_TO_PIXELS * currentZoom;
             double pr = RADIUS_M[i] * METERS_TO_PIXELS * currentZoom;
             if (pr < 0.5) pr = 0.5;
 
-            // Draw orbit
+            // Draw orbit (Kepler path preview) — still drawn even in N-body for context
             Path2D.Double path = getADouble(i, cx, cy);
             g2.setColor(currentZoom < PLANET_VISIBLE_ZOOM * 10 ? new Color(74,74,74) : Color.DARK_GRAY);
             g2.setStroke(new BasicStroke(1f));
             g2.draw(path);
 
-            if (i == 5) {  // Saturn
-                //Ring parameters
+            if (i == 5) {  // Saturn ring rendering remains unchanged
                 double[] innerFactors = {1.1351, 2.075, 2.52, 1.55, 1.0};
                 double[] outerFactors = {2.0, 2.4795, 2.65, 1.7, 1.495};
                 Color[] colors = {
@@ -687,13 +796,11 @@ public class SolarSystemSimulation extends JPanel
                         new Color(42, 37, 30, 180)
                 };
 
-                //Transform & rotate for Saturn’s axial tilt
                 AffineTransform old = g2.getTransform();
                 g2.translate(px, py);
                 g2.rotate(Math.toRadians(26.7));
                 g2.setComposite(AlphaComposite.SrcOver);
 
-                //Draw all Rings
                 for (int r = 0; r < innerFactors.length; r++) {
                     double innerAU = RADIUS_M[i] / AU * innerFactors[r];
                     double outerAU = RADIUS_M[i] / AU * outerFactors[r];
@@ -708,11 +815,8 @@ public class SolarSystemSimulation extends JPanel
                     ));
                     g2.draw(new Ellipse2D.Double(-outerPx, -outerPx, outerPx * 2, outerPx * 2));
                 }
-
-                //Restore Transform
                 g2.setTransform(old);
             }
-
 
             // Draw planet body
             g2.setColor(COLORS[i]);
@@ -751,7 +855,7 @@ public class SolarSystemSimulation extends JPanel
                 g2.draw(new Ellipse2D.Double(px - pr - 3, py - pr - 3, 2*pr + 6, 2*pr + 6));
             }
 
-            // Draw moons
+            // Draw moons (same as before)
             if (MOON_NAMES[i].length > 0) {
                 ArrayList<ArrayList<Point2D.Double>> moonOrbits = moonOrbitPaths.get(i);
                 for (ArrayList<Point2D.Double> morb : moonOrbits) {
@@ -827,27 +931,33 @@ public class SolarSystemSimulation extends JPanel
         g2.drawString(String.format("Time ×%.0f (%.1f days/s)", timeScale, timeScale/DAY), 10, 40);
         g2.drawString(String.format("Sim: %.2f years", simTimeSec/(365.25*DAY)), 10, 60);
 
+        if (nBodyEnabled) {
+            g2.drawString("N-body: ON (press N to toggle)", 10, 80);
+        } else {
+            g2.drawString("N-body: OFF (press N to toggle)", 10, 80);
+        }
+
         if (followingMoon && cameraFocusIndex >= 0 && cameraFocusMoon >= 0) {
             int p = cameraFocusIndex, m = cameraFocusMoon;
             g2.drawString(String.format("Following: %s → %s",
-                    NAMES[p], MOON_NAMES[p][m]), 10, 85);
+                    NAMES[p], MOON_NAMES[p][m]), 10, 105);
             g2.drawString(String.format("Moon Radius: %.0f km | Zoom: %.1fx (Auto)",
-                    MOON_RADIUS_M[p][m]/1_000, targetZoom), 10, 105);
+                    MOON_RADIUS_M[p][m]/1_000, targetZoom), 10, 125);
         } else if (followingPlanet && cameraFocusIndex >= 0) {
-            g2.drawString(String.format("Following: %s", NAMES[cameraFocusIndex]), 10, 85);
+            g2.drawString(String.format("Following: %s", NAMES[cameraFocusIndex]), 10, 105);
             g2.drawString(String.format("Moons: %d | Target Zoom: %.1fx",
-                    MOON_NAMES[cameraFocusIndex].length, targetZoom), 10, 105);
+                    MOON_NAMES[cameraFocusIndex].length, targetZoom), 10, 125);
         } else {
-            g2.drawString("Scroll=Zoom | Ctrl+Scroll=Speed | Click=Follow", 10, 85);
+            g2.drawString("Scroll=Zoom | Ctrl+Scroll=Speed | Click=Follow", 10, 105);
         }
-        g2.drawString("Z=Auto-Zoom: " + (autoZoomEnabled ? "ON" : "OFF"), 10, 125);
+        g2.drawString("Z=Auto-Zoom: " + (autoZoomEnabled ? "ON" : "OFF"), 10, 145);
         if (followingPlanet && cameraFocusIndex >= 0) {
-            g2.drawString("X=Cycle Zoom: " + ZOOM_MODE_NAMES[zoomMode], 10, 145);
+            g2.drawString("X=Cycle Zoom: " + ZOOM_MODE_NAMES[zoomMode], 10, 165);
         }
-        g2.drawString("S=Shading: " + (shadingEnabled ? "ON" : "OFF"), 10, 165);
+        g2.drawString("S=Shading: " + (shadingEnabled ? "ON" : "OFF"), 10, 185);
 
         // Info panel
-        if (selectedPlanet != -1) {
+        if (selectedPlanet != -1 && alive[selectedPlanet]) {
             int i = selectedPlanet;
             int w = 300, h = 140, x0 = getWidth() - w - 20, y0 = 20;
             g2.setColor(new Color(0,0,0,150));
@@ -856,7 +966,8 @@ public class SolarSystemSimulation extends JPanel
             g2.drawRoundRect(x0, y0, w, h, 15, 15);
             g2.drawString("Planet: " + NAMES[i], x0+15, y0+25);
             g2.drawString(String.format("Radius: %.0f km", RADIUS_M[i]/1_000), x0+15, y0+45);
-            g2.drawString(String.format("Dist: %.3f AU", planetDistM[i]/AU), x0+15, y0+65);
+            if (Double.isFinite(planetDistM[i]))
+                g2.drawString(String.format("Dist: %.3f AU", planetDistM[i]/AU), x0+15, y0+65);
             g2.drawString(String.format("Speed: %.2f km/s", planetSpeedKmS[i]), x0+15, y0+85);
             g2.drawString(String.format("Period: %.3f y", PERIOD_Y[i]), x0+15, y0+105);
             if (MOON_NAMES[i].length > 0)
@@ -986,10 +1097,120 @@ public class SolarSystemSimulation extends JPanel
     }
 
     /* ==============================
+       N-BODY SUPPORTING METHODS
+       ============================== */
+
+    /** Initialize velocities from Kepler-derived positions (approx tangential) */
+    private void initializeVelocitiesFromKepler() {
+        for (int i = 0; i < NAMES.length; i++) {
+            double x = planetX[i], y = planetY[i];
+            double r = Math.hypot(x, y);
+            if (r == 0) { vx[i] = vy[i] = 0; continue; }
+            // approximate instantaneous speed from vis-viva
+            double a = A_METERS[i];
+            double v = Math.sqrt(Math.abs(G * M_SUN * (2.0 / r - 1.0 / a)));
+            double theta = Math.atan2(y, x);
+            // set velocity perpendicular (counter-clockwise)
+            vx[i] = -v * Math.sin(theta);
+            vy[i] =  v * Math.cos(theta);
+        }
+    }
+
+    /**
+     * Compute accelerations for all planets due to Sun (fixed at origin) and mutual gravity.
+     * Results stored in out arrays axOut, ayOut.
+     */
+    private void computeAccelerations(double[] axOut, double[] ayOut) {
+        // Reset
+        for (int i = 0; i < NAMES.length; i++) { axOut[i] = 0; ayOut[i] = 0; }
+
+        // Acceleration due to Sun (fixed at origin)
+        for (int i = 0; i < NAMES.length; i++) {
+            if (!alive[i]) continue;
+            double x = planetX[i], y = planetY[i];
+            double r2 = x*x + y*y + 1.0E7 * 1.0E7;
+            double r = Math.sqrt(r2);
+            if (r == 0) continue;
+            double aSun = -G * M_SUN / (r2);
+            axOut[i] += aSun * (x / r);
+            ayOut[i] += aSun * (y / r);
+        }
+
+        // Mutual gravity between planets
+        for (int i = 0; i < NAMES.length; i++) {
+            if (!alive[i]) continue;
+            for (int j = i+1; j < NAMES.length; j++) {
+                if (!alive[j]) continue;
+                double dx = planetX[j] - planetX[i];
+                double dy = planetY[j] - planetY[i];
+                double r2 = dx*dx + dy*dy + 1.0E7 * 1.0E7;
+                double r = Math.sqrt(r2);
+                if (r == 0) continue;
+                double F = G / (r2); // will multiply by masses below
+                double ux = dx / r, uy = dy / r;
+
+                // acceleration contribution
+                double ai =  F * bodyMass[j];
+                double aj =  F * bodyMass[i];
+
+                axOut[i] += ai * ux / bodyMass[i];
+                ayOut[i] += ai * uy / bodyMass[i];
+
+                axOut[j] -= aj * ux / bodyMass[j];
+                ayOut[j] -= aj * uy / bodyMass[j];
+            }
+        }
+    }
+
+    /** Handle simple collisions: merge j into i when distance < sum radii */
+    private void handleCollisions() {
+        for (int i = 0; i < NAMES.length; i++) {
+            if (!alive[i]) continue;
+            for (int j = i + 1; j < NAMES.length; j++) {
+                if (!alive[j]) continue;
+                double dx = planetX[j] - planetX[i];
+                double dy = planetY[j] - planetY[i];
+                double dist = Math.hypot(dx, dy);
+                double minDist = RADIUS_M[i] + RADIUS_M[j];
+
+                if (dist < minDist) {
+                    // Merge smaller mass into larger mass (momentum cons.)
+                    int big = bodyMass[i] >= bodyMass[j] ? i : j;
+                    int small = (big == i) ? j : i;
+
+                    double M1 = bodyMass[big];
+                    double M2 = bodyMass[small];
+                    double Msum = M1 + M2;
+
+                    // Momentum conservation -> new velocity
+                    double vxNew = (vx[big]*M1 + vx[small]*M2) / Msum;
+                    double vyNew = (vy[big]*M1 + vy[small]*M2) / Msum;
+
+                    // Update big
+                    bodyMass[big] = Msum;
+                    vx[big] = vxNew;
+                    vy[big] = vyNew;
+
+                    // Optionally increase visual radius with simple mass->radius scaling (assume constant density)
+                    double density = M1 / (4.0/3.0 * Math.PI * Math.pow(RADIUS_M[big], 3));
+                    double newRadius = Math.cbrt( (3.0 * Msum) / (4.0 * Math.PI * density) );
+                    RADIUS_M[big] = newRadius;
+
+                    // Deactivate small
+                    alive[small] = false;
+                    bodyMass[small] = 0;
+                    vx[small] = vy[small] = 0;
+                    planetX[small] = planetY[small] = 1e30; // send far away
+                }
+            }
+        }
+    }
+
+    /* ==============================
        MAIN
        ============================== */
     public static void main(String[] args) {
-        JFrame frame = new JFrame("Solar System Simulation – Textures & Smooth Unfollow");
+        JFrame frame = new JFrame("Solar System Simulation – Textures & Smooth Unfollow (N-body available)");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.add(new SolarSystemSimulation());
         frame.pack();
