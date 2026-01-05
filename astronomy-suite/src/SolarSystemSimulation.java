@@ -108,6 +108,16 @@ public class SolarSystemSimulation extends JPanel
     private final boolean[] planetVisible = new boolean[12];
 
     // ----- UI components -----
+    /** Reference to the main menu bar for toggling visibility */
+    private JFrame parentFrame;
+    /** Whether menu bar is currently visible */
+    private boolean menuBarVisible = true;
+    /** Reference to the search bar panel for toggling visibility */
+    private JPanel searchBarPanel;
+    /** Reference to the sidebar/navigation panel for toggling visibility */
+    private JPanel sidebarPanel;
+    /** Whether search bar and sidebar are currently visible */
+    private boolean uiPanelsVisible = true;
     /** Text field used by the top search bar to jump to bodies */
     private JTextField searchField;
     /** Popup list of name suggestions for the search field */
@@ -171,6 +181,28 @@ public class SolarSystemSimulation extends JPanel
     /** Speed of zoom interpolation (higher = faster) */
     private static final double ZOOM_SPEED = 10.0;
     private int zoomMode = 0;                   // 0=Planet, 1=Orbit, 2=Manual
+
+    // ----- Educational features for lessons -----
+    private boolean lessonMode = false;
+    private int currentLesson = 1;              // Default to Lesson 1
+    private boolean showKeplersLaw = false;     // Show Kepler's 3rd Law calculations
+    private boolean showPerihelionAphelion = false; // Highlight perihelion/aphelion points
+    private boolean showVelocityVectors = false;    // Show velocity vectors on planets
+    private boolean showVelocityComparison = false; // Show velocity comparison at perihelion vs aphelion
+
+    // ----- Guided Tour System -----
+    private boolean guidedTourActive = false;
+    private int tourStep = 0;
+    private double tourStepStartTime = 0;
+    private String tourMessage = "";
+    private double tourMessageAlpha = 0.0;
+    private static final double TOUR_MESSAGE_FADE_SPEED = 2.0;
+    private boolean tourStepReady = false;  // True when user can advance to next step
+    private boolean[] savedPlanetVisibility = null;  // Save visibility state before tour
+
+    // ----- UI Size Settings -----
+    enum UISize { SMALL, NORMAL, LARGE }
+    private UISize uiSize = UISize.NORMAL;  // Default to normal (previously small)
 
     // ----- Orbit visibility thresholds -----
     /** Zoom level at which orbits become visible */
@@ -437,20 +469,24 @@ public class SolarSystemSimulation extends JPanel
             moonMean[i] = new double[num];
         }
 
-        // Pre-compute planet orbit paths with proper orbital element transformations
+        // Pre-compute planet orbit paths using Kepler's equation
+        // E=0 is at perihelion (closest to Sun)
         for (int i = 0; i < NAMES.length; i++) {
             ArrayList<Point2D.Double> orbit = new ArrayList<>();
             double a = A_METERS[i], e = ECC[i], b = a * Math.sqrt(1 - e * e);
             double omega = Math.toRadians(PLANET_VARPI0[i] - PLANET_OMEGA0[i]); // argument of perihelion
             double Omega = Math.toRadians(PLANET_OMEGA0[i]);                    // longitude of ascending node
             for (int j = 0; j <= ORBIT_RESOLUTION; j++) {
+                // Eccentric anomaly (E=0 is perihelion, E=π is aphelion)
                 double E = 2 * Math.PI * j / ORBIT_RESOLUTION;
-                // Orbital plane coordinates
+                // Orbital plane coordinates (Sun at one focus)
                 double xr = a * (Math.cos(E) - e);
                 double yr = b * Math.sin(E);
                 // Apply orbital element rotations to get ecliptic plane coordinates
-                double x = xr * Math.cos(omega + Omega) - yr * Math.sin(omega + Omega);
-                double y = xr * Math.sin(omega + Omega) + yr * Math.cos(omega + Omega);
+                double xTemp = xr * Math.cos(omega + Omega) - yr * Math.sin(omega + Omega);
+                // Apply 90° clockwise rotation to fix coordinate system
+                double x = xr * Math.sin(omega + Omega) + yr * Math.cos(omega + Omega);
+                double y = -xTemp;
                 orbit.add(new Point2D.Double(x, y));
             }
             orbitPaths.add(orbit);
@@ -465,10 +501,12 @@ public class SolarSystemSimulation extends JPanel
                 double arg = MOON_ARG_PERI[i][m];
                 for (int j = 0; j <= ORBIT_RESOLUTION; j++) {
                     double E = 2 * Math.PI * j / ORBIT_RESOLUTION;
-                    double x = a * (Math.cos(E) - e);
-                    double y = b * Math.sin(E);
-                    double rx = x * Math.cos(arg) - y * Math.sin(arg);
-                    double ry = x * Math.sin(arg) + y * Math.cos(arg);
+                    double xTemp = a * (Math.cos(E) - e);
+                    double yTemp = b * Math.sin(E);
+                    double rxTemp = xTemp * Math.cos(arg) - yTemp * Math.sin(arg);
+                    // Apply 90° clockwise rotation to fix coordinate system
+                    double rx = xTemp * Math.sin(arg) + yTemp * Math.cos(arg);
+                    double ry = -rxTemp;
                     orbit.add(new Point2D.Double(rx, ry));
                 }
                 moonOrbits.add(orbit);
@@ -529,6 +567,16 @@ public class SolarSystemSimulation extends JPanel
                     }
                     selectedPlanet = (selectedPlanet + 1) % NAMES.length;
                     e.consume();
+                } else if (code == KeyEvent.VK_H) {
+                    // Toggle menu bar visibility
+                    toggleMenuBarVisibility();
+                    e.consume();
+                } else if (code == KeyEvent.VK_N) {
+                    // N: Next step in guided tour
+                    if (guidedTourActive && tourStepReady) {
+                        advanceTourStep();
+                        e.consume();
+                    }
                 }
             }
         });
@@ -559,12 +607,12 @@ public class SolarSystemSimulation extends JPanel
     private boolean isPlanetVisible(int planetIndex) {
         // Check individual planet visibility toggle
         if (planetIndex >= 0 && planetIndex < planetVisible.length && !planetVisible[planetIndex]) {
-            return false;
+            return true;
         }
         // Check showOnlySelected mode
-        if (!showOnlySelected) return true;
-        if (selectedPlanet == -1) return true;
-        return planetIndex == selectedPlanet;
+        if (!showOnlySelected) return false;
+        if (selectedPlanet == -1) return false;
+        return planetIndex != selectedPlanet;
     }
 
     /* ==============================
@@ -735,7 +783,40 @@ public class SolarSystemSimulation extends JPanel
         g2.setColor(Color.ORANGE);
         g2.fill(new Ellipse2D.Double(sunXpix, sunYpix, 2*sunR, 2*sunR));
 
-        FontMetrics fm = g2.getFontMetrics();
+        // Draw Sun label during guided tour
+        if (guidedTourActive && showLabels) {
+            double sunCenterX = sunXpix + sunR;
+            double sunCenterY = sunYpix + sunR;
+
+            // Dynamic font size based on uiSize
+            float labelFontSize = switch (uiSize) {
+                case SMALL -> 9f;
+                case NORMAL -> 11f;
+                default -> 13f;
+            };
+
+            Font oldFont = g2.getFont();
+            g2.setFont(oldFont.deriveFont(Font.BOLD, labelFontSize));
+            String sunLabel = "Sun";
+            FontMetrics fm = g2.getFontMetrics();
+            int labelWidth = fm.stringWidth(sunLabel);
+            int labelHeight = fm.getHeight();
+
+            // Position label below the Sun
+            int labelX = (int)(sunCenterX - labelWidth / 2.0);
+            int labelY = (int)(sunCenterY + sunR + labelHeight + 5);
+
+            // Draw label background box
+            int padding = 4;
+            g2.setColor(new Color(0, 0, 0, 180));
+            g2.fillRoundRect(labelX - padding, labelY - labelHeight + 3,
+                           labelWidth + padding * 2, labelHeight + 2, 4, 4);
+
+            // Draw label text
+            g2.setColor(new Color(255, 200, 100));
+            g2.drawString(sunLabel, labelX, labelY);
+            g2.setFont(oldFont);
+        }
 
         // Draw asteroid belt and Kuiper belt as rings
         drawAsteroidBeltRing(g2, cx, cy);
@@ -746,7 +827,7 @@ public class SolarSystemSimulation extends JPanel
 
         // Draw planets and moons
         for (int i = 0; i < NAMES.length; i++) {
-            if (!isPlanetVisible(i)) continue;
+            if (isPlanetVisible(i)) continue;
 
             // Planet positions are heliocentric, so add Sun's barycentric offset
             double worldX = planetX[i] + sunBarycenterX;
@@ -762,6 +843,74 @@ public class SolarSystemSimulation extends JPanel
                 g2.setColor(getOrbitColor(i));
                 g2.setStroke(new BasicStroke(1f));
                 g2.draw(path);
+
+                // Draw perihelion and aphelion markers - calculated from actual orbit path
+                if (showPerihelionAphelion && !orbitPaths.get(i).isEmpty()) {
+                    ArrayList<Point2D.Double> orbit = orbitPaths.get(i);
+                    Point2D.Double periPoint = null;
+                    Point2D.Double apoPoint = null;
+                    double minDist = Double.MAX_VALUE;
+                    double maxDist = 0;
+
+                    // Find actual perihelion and aphelion from orbit path (heliocentric distances)
+                    for (Point2D.Double p : orbit) {
+                        double dist = Math.sqrt(p.x * p.x + p.y * p.y);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            periPoint = p;
+                        }
+                        if (dist > maxDist) {
+                            maxDist = dist;
+                            apoPoint = p;
+                        }
+                    }
+
+                    if (periPoint != null && apoPoint != null) {
+                        // Convert to screen coordinates (add Sun's barycentric offset)
+                        double periX = cx + (periPoint.x + sunBarycenterX - camX) * METERS_TO_PIXELS * currentZoom;
+                        double periY = cy + (periPoint.y + sunBarycenterY - camY) * METERS_TO_PIXELS * currentZoom;
+                        double apoX = cx + (apoPoint.x + sunBarycenterX - camX) * METERS_TO_PIXELS * currentZoom;
+                        double apoY = cy + (apoPoint.y + sunBarycenterY - camY) * METERS_TO_PIXELS * currentZoom;
+
+                        // Smart marker sizing: scale with zoom but maintain minimum visibility
+                        // At low zoom (zoomed out), markers are smaller but still visible
+                        double baseMarkerSize = 6.0;
+                        double zoomFactor = Math.max(0.3, Math.min(1.5, currentZoom / 5.0));
+                        double markerSize = baseMarkerSize * zoomFactor;
+
+                        // Calculate opacity based on screen distance from center (fade markers that are far off-screen)
+                        double periDistFromCenter = Math.hypot(periX - cx, periY - cy);
+                        double apoDistFromCenter = Math.hypot(apoX - cx, apoY - cy);
+                        double maxScreenDist = Math.hypot(getWidth(), getHeight()) / 2.0;
+
+                        Font oldFont = g2.getFont();
+                        float fontSize = (float)(9f + 4f * zoomFactor);
+
+                        // Draw perihelion marker (red, closest to Sun)
+                        if (periDistFromCenter < maxScreenDist * 1.5) {
+                            int alpha = (int)(220 * Math.max(0.4, 1.0 - periDistFromCenter / (maxScreenDist * 1.5)));
+                            g2.setColor(new Color(255, 80, 80, alpha));
+                            g2.setStroke(new BasicStroke((float)(2.0f * zoomFactor)));
+                            g2.draw(new Ellipse2D.Double(periX - markerSize, periY - markerSize,
+                                                          2*markerSize, 2*markerSize));
+                            g2.setFont(oldFont.deriveFont(Font.BOLD, fontSize));
+                            g2.drawString("P", (int)(periX + markerSize + 3), (int)(periY - markerSize + 1));
+                        }
+
+                        // Draw aphelion marker (blue, farthest from Sun)
+                        if (apoDistFromCenter < maxScreenDist * 1.5) {
+                            int alpha = (int)(220 * Math.max(0.4, 1.0 - apoDistFromCenter / (maxScreenDist * 1.5)));
+                            g2.setColor(new Color(80, 150, 255, alpha));
+                            g2.setStroke(new BasicStroke((float)(2.0f * zoomFactor)));
+                            g2.draw(new Ellipse2D.Double(apoX - markerSize, apoY - markerSize,
+                                                          2*markerSize, 2*markerSize));
+                            g2.setFont(oldFont.deriveFont(Font.BOLD, fontSize));
+                            g2.drawString("A", (int)(apoX + markerSize + 3), (int)(apoY - markerSize + 1));
+                        }
+
+                        g2.setFont(oldFont);
+                    }
+                }
             }
 
             // Draw Saturn rings only if enabled
@@ -819,25 +968,66 @@ public class SolarSystemSimulation extends JPanel
                 g2.fill(planetEllipse);
             }
 
-            // Draw label with overlap avoidance
+            // Draw label with overlap avoidance and zoom-aware sizing
             if (showLabels) {
+                // Scale labels based on zoom level
+                float labelSize = (float)(11f + Math.min(3f, currentZoom * 0.5f));
+                Font labelFont = g2.getFont().deriveFont(Font.PLAIN, labelSize);
+                g2.setFont(labelFont);
+
                 g2.setColor(Color.WHITE);
                 String name = NAMES[i];
-                int w = fm.stringWidth(name), h = fm.getHeight();
+                FontMetrics labelFm = g2.getFontMetrics();
+                int w = labelFm.stringWidth(name), h = labelFm.getHeight();
+
+                // Position label away from planet, scaling offset inversely with zoom
+                // When zoomed out, labels should be closer to planets
                 double angle = Math.atan2(py - cy, px - cx);
-                int lx = (int)(px + Math.cos(angle)*(pr+12));
-                int ly = (int)(py + Math.sin(angle)*(pr+12));
-                Rectangle box = new Rectangle(lx, ly-h, w, h);
+                double baseOffset = 8.0; // Minimum offset from planet edge
+                double zoomScaledOffset = Math.min(15.0, baseOffset * Math.max(1.0, currentZoom));
+                double labelOffset = pr + zoomScaledOffset;
+                int lx = (int)(px + Math.cos(angle) * labelOffset);
+                int ly = (int)(py + Math.sin(angle) * labelOffset);
+                Rectangle box = new Rectangle(lx, ly - h, w, h);
+
+                // Smart overlap avoidance with limited retries
+                int maxTries = (currentZoom < 1.0) ? 2 : 4; // Fewer retries when zoomed out
                 int tries = 0;
-                while (tries < 4) {
+                boolean foundSpot = false;
+                while (tries < maxTries) {
                     boolean overlap = false;
                     for (Rectangle r : labelBoxes) {
-                        if (r.intersects(box)) { box.y += h; overlap = true; tries++; break; }
+                        if (r.intersects(box)) {
+                            // When zoomed out, try moving horizontally as well as vertically
+                            if (currentZoom < 1.0 && tries % 2 == 1) {
+                                box.x += w / 2;
+                            } else {
+                                box.y += h;
+                            }
+                            overlap = true;
+                            tries++;
+                            break;
+                        }
                     }
-                    if (!overlap) break;
+                    if (!overlap) {
+                        foundSpot = true;
+                        break;
+                    }
                 }
-                labelBoxes.add(box);
-                g2.drawString(name, box.x, box.y + h - 3);
+
+                // Only draw if we found a non-overlapping spot or if zoomed in enough
+                if (foundSpot || currentZoom > 3.0) {
+                    labelBoxes.add(box);
+                    // Add subtle shadow for better readability when zoomed out
+                    if (currentZoom < 2.0) {
+                        g2.setColor(new Color(0, 0, 0, 150));
+                        g2.drawString(name, box.x + 1, box.y + h - 2);
+                        g2.setColor(Color.WHITE);
+                    }
+                    g2.drawString(name, box.x, box.y + h - 3);
+                }
+
+                g2.setFont(g2.getFont().deriveFont(Font.PLAIN, 12f)); // Reset font
             }
 
 
@@ -880,8 +1070,10 @@ public class SolarSystemSimulation extends JPanel
                         double mx = a * (Math.cos(E) - e);
                         double my = b * Math.sin(E);
                         double arg = MOON_ARG_PERI[i][m];
-                        double rx = mx * Math.cos(arg) - my * Math.sin(arg);
-                        double ry = mx * Math.sin(arg) + my * Math.cos(arg);
+                        double rxTemp = mx * Math.cos(arg) - my * Math.sin(arg);
+                        // Apply 90° clockwise rotation to fix coordinate system
+                        double rx = mx * Math.sin(arg) + my * Math.cos(arg);
+                        double ry = -rxTemp;
                         // Moon position relative to planet's barycentric position
                         double moonWorldX = planetX[i] + sunBarycenterX + rx;
                         double moonWorldY = planetY[i] + sunBarycenterY + ry;
@@ -909,6 +1101,11 @@ public class SolarSystemSimulation extends JPanel
                     }
                 }
             }
+        }
+
+        // Draw velocity vectors for planets (educational feature)
+        if (showVelocityVectors) {
+            drawVelocityVectors(g2, cx, cy);
         }
 
         drawLaunchedObjects(g2, cx, cy);
@@ -939,35 +1136,95 @@ public class SolarSystemSimulation extends JPanel
         // Info panel
         if (selectedPlanet != -1) {
             int i = selectedPlanet;
-            // Larger, more comfortable panel; extra height when moon metadata is visible
-            int baseHeight = 210;
-            int extraMoonHeight = 120;
-            int w = 380;
-            int h = baseHeight + ((selectedMoon >= 0 && selectedMoon < MOON_NAMES[i].length) ? extraMoonHeight : 0);
-            int x0 = getWidth() - w - 20, y0 = 20;
 
-            // Panel background with subtle border
-            g2.setColor(new Color(10, 10, 20, 200));
-            g2.fillRoundRect(x0, y0, w, h, 18, 18);
-            g2.setColor(new Color(200, 220, 255, 200));
-            g2.setStroke(new BasicStroke(1.5f));
-            g2.drawRoundRect(x0, y0, w, h, 18, 18);
+            // Dynamic sizing based on uiSize setting
+            int panelWidth, marginRight, marginTop;
+            float headerFontSize, normalFontSize;
+            int lineSpacing, topPadding, sidePadding;
 
-            // Use a slightly smaller, clean font for dense info
+            switch (uiSize) {
+                case SMALL:
+                    panelWidth = 240;
+                    marginRight = 12;
+                    marginTop = 12;
+                    headerFontSize = 9f;
+                    normalFontSize = 8f;
+                    lineSpacing = 12;
+                    topPadding = 18;
+                    sidePadding = 10;
+                    break;
+                case NORMAL:
+                    panelWidth = 280;
+                    marginRight = 15;
+                    marginTop = 15;
+                    headerFontSize = 11f;
+                    normalFontSize = 10f;
+                    lineSpacing = 14;
+                    topPadding = 22;
+                    sidePadding = 12;
+                    break;
+                case LARGE:
+                default:
+                    panelWidth = 340;
+                    marginRight = 18;
+                    marginTop = 18;
+                    headerFontSize = 12f;
+                    normalFontSize = 11f;
+                    lineSpacing = 16;
+                    topPadding = 25;
+                    sidePadding = 15;
+                    break;
+            }
+
+            // Calculate dynamic height based on actual content
+            int baseLines = 11;  // Header + Name + Radius + Distance + Speed + a/e + Peri/Apo + Period + Orbit progress + Central mass + Moons count
+            int extraKeplerLines = showKeplersLaw ? 6 : 0;  // Header + divider + 3 calculation steps + result with error
+            int extraMoonLines = 0;
+            if (selectedMoon >= 0 && selectedMoon < MOON_NAMES[i].length) {
+                extraMoonLines = 7;  // Moon header, spacing, name, a/e, peri/apo, sidereal, synodic
+            }
+
+            int totalLines = baseLines + extraKeplerLines + extraMoonLines;
+            int w = panelWidth;
+            int h = (topPadding + 10) + (totalLines * lineSpacing) + 10;  // Top padding + lines + bottom padding
+            int x0 = getWidth() - w - marginRight, y0 = marginTop;
+
+            // Modern gradient panel background
+            GradientPaint gradient = new GradientPaint(
+                x0, y0, new Color(20, 25, 40, 240),
+                x0, y0 + h, new Color(15, 20, 35, 240)
+            );
+            g2.setPaint(gradient);
+            g2.fillRoundRect(x0, y0, w, h, 15, 15);
+
+            // Accent border with glow effect
+            g2.setColor(new Color(100, 150, 255, 180));
+            g2.setStroke(new BasicStroke(2f));
+            g2.drawRoundRect(x0, y0, w, h, 15, 15);
+            g2.setColor(new Color(100, 150, 255, 60));
+            g2.setStroke(new BasicStroke(4f));
+            g2.drawRoundRect(x0 - 1, y0 - 1, w + 2, h + 2, 16, 16);
+
+            // Use a modern, clean font
             Font oldFont = g2.getFont();
-            g2.setFont(oldFont.deriveFont(Font.PLAIN, 12f));
+            g2.setFont(oldFont.deriveFont(Font.PLAIN, normalFontSize));
 
-            int lineY = y0 + 26;
-            int lineStep = 16;
-            int colX = x0 + 16;
+            int lineY = y0 + topPadding;
+            int lineStep = lineSpacing;
+            int colX = x0 + sidePadding;
 
-            // Header
-            g2.setColor(new Color(230, 240, 255));
-            g2.drawString("Planet", colX, lineY); lineY += lineStep;
-            g2.setColor(Color.WHITE);
+            // Header with accent color
+            g2.setFont(oldFont.deriveFont(Font.BOLD, headerFontSize));
+            g2.setColor(new Color(120, 180, 255));
+            g2.drawString("PLANET", colX, lineY);
+            lineY += lineStep + 4;
+
+            g2.setFont(oldFont.deriveFont(Font.PLAIN, normalFontSize));
+            g2.setColor(new Color(255, 255, 255));
             g2.drawString("Name: " + NAMES[i], colX, lineY); lineY += lineStep;
 
-            // Planet core properties
+            // Planet core properties with improved colors
+            g2.setColor(new Color(220, 230, 250));
             g2.drawString(String.format("Radius: %.0f km", RADIUS_M[i]/1_000), colX, lineY); lineY += lineStep;
             if (Double.isFinite(planetDistM[i])) {
                 g2.drawString(String.format("Distance: %.3f AU (%.0f km)",
@@ -991,8 +1248,71 @@ public class SolarSystemSimulation extends JPanel
             g2.drawString(String.format("a: %.3f AU  e: %.3f", a_m / AU, e), colX, lineY); lineY += lineStep;
             g2.drawString(String.format("Peri: %.3f AU  Apo: %.3f AU", peri_m / AU, apo_m / AU), colX, lineY); lineY += lineStep;
             g2.drawString(String.format("Period: %.1f d (%.2f y)", periodDays, periodYears), colX, lineY); lineY += lineStep;
+
+            // Kepler's 3rd Law display for Lesson 1 - enhanced with detailed calculations
+            if (showKeplersLaw) {
+                double aAU = a_m / AU;
+                double pSquared = periodYears * periodYears;
+                double aCubed = aAU * aAU * aAU;
+                double ratio = pSquared / aCubed;
+
+                // Add spacing before Kepler's Law section
+                lineY += (int)(lineStep * 0.3);
+
+                // Draw prominent header with divider line
+                g2.setFont(oldFont.deriveFont(Font.BOLD, headerFontSize));
+                g2.setColor(new Color(255, 200, 80));
+                g2.drawString("KEPLER'S 3RD LAW", colX, lineY);
+                lineY += lineStep;
+
+                // Draw divider line under header
+                g2.setColor(new Color(255, 200, 80, 150));
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawLine(colX, lineY - (int)(lineStep * 0.7), colX + w - (sidePadding * 2) - 8, lineY - (int)(lineStep * 0.7));
+
+                // Show calculation steps with emphasis
+                g2.setFont(oldFont.deriveFont(Font.PLAIN, normalFontSize * 0.95f));
+                g2.setColor(new Color(230, 230, 250));
+
+                // Step 1: Show P² calculation
+                g2.drawString(String.format("P² = (%.2f y)² = %.4f y²", periodYears, pSquared), colX, lineY);
+                lineY += lineStep;
+
+                // Step 2: Show a³ calculation
+                g2.drawString(String.format("a³ = (%.3f AU)³ = %.4f AU³", aAU, aCubed), colX, lineY);
+                lineY += lineStep;
+
+                // Step 3: Show the ratio calculation with highlight (hidden during guided tour)
+                int boxHeight = (int)(lineStep * 1.3);
+                if (!guidedTourActive) {
+                    g2.setColor(new Color(255, 200, 50, 60));
+                    g2.fillRoundRect(colX - 6, lineY - (int)(lineStep * 0.85), w - (sidePadding * 2), boxHeight, 8, 8);
+
+                    // Draw border around result
+                    g2.setColor(new Color(255, 220, 80, 200));
+                    g2.setStroke(new BasicStroke(2.0f));
+                    g2.drawRoundRect(colX - 6, lineY - (int)(lineStep * 0.85), w - (sidePadding * 2), boxHeight, 8, 8);
+                }
+
+                // Final ratio with larger, bold text
+                g2.setFont(oldFont.deriveFont(Font.BOLD, normalFontSize * 1.15f));
+                g2.setColor(new Color(255, 230, 100));
+                g2.drawString(String.format("P² / a³ = %.4f", ratio), colX, lineY);
+
+                // Show comparison to ideal value
+                g2.setFont(oldFont.deriveFont(Font.PLAIN, normalFontSize * 0.9f));
+                g2.setColor(new Color(180, 220, 255));
+                double percentError = Math.abs(ratio - 1.0) * 100.0;
+                g2.drawString(String.format("(%.2f%% from 1.000)", percentError), colX + (int)(w * 0.55), lineY);
+
+                g2.setFont(oldFont.deriveFont(Font.PLAIN, normalFontSize));
+                g2.setColor(new Color(220, 230, 250));
+                lineY += lineStep + (int)(lineStep * 0.3);
+            }
+
             g2.drawString(String.format("Orbit progress: %.1f%%", pct), colX, lineY); lineY += lineStep;
 
+            g2.setColor(new Color(180, 200, 230));
             g2.drawString(String.format("Central mass: %.3e kg", sunMass), colX, lineY); lineY += lineStep;
             if (MOON_NAMES[i].length > 0) {
                 g2.drawString(String.format("Moons: %d", MOON_NAMES[i].length), colX, lineY); lineY += lineStep;
@@ -1001,11 +1321,15 @@ public class SolarSystemSimulation extends JPanel
             // Moon metadata block when a moon is selected
             if (selectedMoon >= 0 && selectedMoon < MOON_NAMES[i].length) {
                 int m = selectedMoon;
-                lineY += lineStep; // spacing before moon section
+                lineY += lineStep + 2; // spacing before moon section
 
-                g2.setColor(new Color(230, 240, 255));
-                g2.drawString("Moon", colX, lineY); lineY += lineStep;
-                g2.setColor(Color.WHITE);
+                g2.setFont(oldFont.deriveFont(Font.BOLD, headerFontSize));
+                g2.setColor(new Color(150, 200, 255));
+                g2.drawString("MOON", colX, lineY);
+                lineY += lineStep + 2;
+
+                g2.setFont(oldFont.deriveFont(Font.PLAIN, normalFontSize));
+                g2.setColor(new Color(255, 255, 255));
                 g2.drawString("Name: " + MOON_NAMES[i][m], colX, lineY); lineY += lineStep;
 
                 double aMoon = MOON_A_M[i][m];
@@ -1022,6 +1346,7 @@ public class SolarSystemSimulation extends JPanel
                     synodicDays = Double.NaN;
                 }
 
+                g2.setColor(new Color(220, 230, 250));
                 g2.drawString(String.format("a: %.0f km  e: %.3f", aMoon/1_000.0, eMoon), colX, lineY); lineY += lineStep;
                 g2.drawString(String.format("Peri: %.0f km  Apo: %.0f km", periMoon/1_000.0, apoMoon/1_000.0), colX, lineY); lineY += lineStep;
                 g2.drawString(String.format("Sidereal period: %.2f d", periodSidDays), colX, lineY); lineY += lineStep;
@@ -1032,6 +1357,183 @@ public class SolarSystemSimulation extends JPanel
 
             // Restore font
             g2.setFont(oldFont);
+        }
+
+        // Modern lesson mode indicator banner
+        if (lessonMode) {
+            // Dynamic sizing based on uiSize setting
+            int bannerWidth, bannerHeight;
+            float titleFontSize, subtitleFontSize;
+
+            switch (uiSize) {
+                case SMALL:
+                    bannerWidth = 240;
+                    bannerHeight = 42;
+                    titleFontSize = 10f;
+                    subtitleFontSize = 8f;
+                    break;
+                case NORMAL:
+                    bannerWidth = 280;
+                    bannerHeight = 50;
+                    titleFontSize = 12f;
+                    subtitleFontSize = 10f;
+                    break;
+                case LARGE:
+                default:
+                    bannerWidth = 330;
+                    bannerHeight = 60;
+                    titleFontSize = 14f;
+                    subtitleFontSize = 11f;
+                    break;
+            }
+
+            int bannerX = (getWidth() - bannerWidth) / 2;
+            int bannerY = 15;
+
+            // Shadow effect
+            g2.setColor(new Color(0, 0, 0, 80));
+            g2.fillRoundRect(bannerX + 3, bannerY + 3, bannerWidth, bannerHeight, 15, 15);
+
+            // Gradient background
+            GradientPaint bannerGradient = new GradientPaint(
+                bannerX, bannerY, new Color(40, 80, 160, 240),
+                bannerX, bannerY + bannerHeight, new Color(60, 120, 200, 240)
+            );
+            g2.setPaint(bannerGradient);
+            g2.fillRoundRect(bannerX, bannerY, bannerWidth, bannerHeight, 15, 15);
+
+            // Accent border with glow
+            g2.setColor(new Color(120, 180, 255, 200));
+            g2.setStroke(new BasicStroke(2.5f));
+            g2.drawRoundRect(bannerX, bannerY, bannerWidth, bannerHeight, 15, 15);
+            g2.setColor(new Color(150, 200, 255, 80));
+            g2.setStroke(new BasicStroke(5f));
+            g2.drawRoundRect(bannerX - 1, bannerY - 1, bannerWidth + 2, bannerHeight + 2, 16, 16);
+
+            // Title text with icon
+            g2.setColor(new Color(255, 255, 255, 250));
+            g2.setFont(g2.getFont().deriveFont(Font.BOLD, titleFontSize));
+            String title = "🎓 Lesson " + currentLesson;
+            int titleWidth = g2.getFontMetrics().stringWidth(title);
+            int titleY = bannerY + (int)(bannerHeight * 0.4);
+            g2.drawString(title, bannerX + (bannerWidth - titleWidth) / 2, titleY);
+
+            // Lesson name
+            String[] lessonNames = {
+                "Introduction to Orbital Motion",
+                "Velocity & Kepler's 2nd Law",
+                "Scale of the Solar System",
+                "Moon Systems",
+                "Time Control"
+            };
+            String subtitle = lessonNames[currentLesson - 1];
+            g2.setFont(g2.getFont().deriveFont(Font.PLAIN, subtitleFontSize));
+            g2.setColor(new Color(220, 235, 255, 250));
+            int subtitleWidth = g2.getFontMetrics().stringWidth(subtitle);
+            int subtitleY = bannerY + (int)(bannerHeight * 0.72);
+            g2.drawString(subtitle, bannerX + (bannerWidth - subtitleWidth) / 2, subtitleY);
+
+            // Draw guided tour message if active
+            if (guidedTourActive && !tourMessage.isEmpty()) {
+                drawGuidedTourMessage(g2);
+            }
+        }
+    }
+
+    /**
+     * Draw the guided tour message box with multi-line text
+     * Box size dynamically adjusts to fit text content
+     */
+    private void drawGuidedTourMessage(Graphics2D g2) {
+        int alpha = (int)(tourMessageAlpha * 255);
+        if (alpha <= 0) return;
+
+        // Dynamic sizing based on uiSize setting
+        float fontSize;
+        int minWidth, paddingH, paddingV, bottomMargin;
+
+        switch (uiSize) {
+            case SMALL:
+                fontSize = 10f;
+                minWidth = 180;
+                paddingH = 32;
+                paddingV = 28;
+                bottomMargin = 50;
+                break;
+            case NORMAL:
+                fontSize = 12f;
+                minWidth = 220;
+                paddingH = 40;
+                paddingV = 35;
+                bottomMargin = 60;
+                break;
+            case LARGE:
+            default:
+                fontSize = 14f;
+                minWidth = 260;
+                paddingH = 50;
+                paddingV = 42;
+                bottomMargin = 70;
+                break;
+        }
+
+        // Split message into lines
+        String[] lines = tourMessage.split("\n");
+
+        // Calculate box dimensions based on text
+        g2.setFont(g2.getFont().deriveFont(Font.PLAIN, fontSize));
+        FontMetrics fm = g2.getFontMetrics();
+        int maxWidth = 0;
+        for (String line : lines) {
+            int lineWidth = fm.stringWidth(line);
+            maxWidth = Math.max(maxWidth, lineWidth);
+        }
+
+        // Add padding and ensure minimum size
+        int boxWidth = Math.max(maxWidth + paddingH, minWidth);
+        int lineHeight = fm.getHeight();
+        int textHeight = lineHeight * lines.length;
+        int boxHeight = textHeight + paddingV;
+
+        // Center horizontally, place near bottom
+        int boxX = (getWidth() - boxWidth) / 2;
+        int boxY = getHeight() - boxHeight - bottomMargin;
+
+        // Shadow effect
+        g2.setColor(new Color(0, 0, 0, Math.min(alpha, 100)));
+        g2.fillRoundRect(boxX + 4, boxY + 4, boxWidth, boxHeight, 12, 12);
+
+        // Box background with gradient
+        GradientPaint boxGradient = new GradientPaint(
+            boxX, boxY, new Color(30, 30, 60, Math.min(alpha, 230)),
+            boxX, boxY + boxHeight, new Color(50, 50, 90, Math.min(alpha, 230))
+        );
+        g2.setPaint(boxGradient);
+        g2.fillRoundRect(boxX, boxY, boxWidth, boxHeight, 12, 12);
+
+        // Border with glow effect
+        g2.setColor(new Color(100, 150, 255, Math.min(alpha, 200)));
+        g2.setStroke(new BasicStroke(2.5f));
+        g2.drawRoundRect(boxX, boxY, boxWidth, boxHeight, 12, 12);
+
+        // Optional: pulsing glow when ready to advance
+        if (tourStepReady) {
+            double pulse = Math.sin(System.currentTimeMillis() / 300.0) * 0.3 + 0.7;
+            int glowAlpha = (int)(pulse * Math.min(alpha, 150));
+            g2.setColor(new Color(150, 200, 255, glowAlpha));
+            g2.setStroke(new BasicStroke(4.5f));
+            g2.drawRoundRect(boxX - 2, boxY - 2, boxWidth + 4, boxHeight + 4, 14, 14);
+        }
+
+        // Draw text lines
+        g2.setColor(new Color(255, 255, 255, alpha));
+        g2.setFont(g2.getFont().deriveFont(Font.PLAIN, fontSize));
+        int textY = boxY + (int)(paddingV * 0.6);
+        for (String line : lines) {
+            int textWidth = fm.stringWidth(line);
+            int textX = boxX + (boxWidth - textWidth) / 2;
+            g2.drawString(line, textX, textY);
+            textY += lineHeight;
         }
     }
 
@@ -1188,8 +1690,11 @@ public class SolarSystemSimulation extends JPanel
         }
         double xr = a * (Math.cos(E) - e);
         double yr = a * Math.sqrt(1 - e * e) * Math.sin(E);
-        double x = xr * Math.cos(omega + Omega) - yr * Math.sin(omega + Omega);
-        double y = xr * Math.sin(omega + Omega) + yr * Math.cos(omega + Omega);
+        double xTemp = xr * Math.cos(omega + Omega) - yr * Math.sin(omega + Omega);
+
+        // Apply 90° clockwise rotation to fix coordinate system
+        double x = xr * Math.sin(omega + Omega) + yr * Math.cos(omega + Omega);
+        double y = -xTemp;
         return new Point2D.Double(x, y);
     }
 
@@ -1374,10 +1879,10 @@ public class SolarSystemSimulation extends JPanel
         // Gradient endpoints: very close together for abrupt transition
         // Lit point: just 0.3x radius toward sun (creates sharp edge)
         // Dark point: just 0.3x radius away from sun
-        float litX = (float)(px + lightX * radiusPx * 0.2);
-        float litY = (float)(py + lightY * radiusPx * 0.2);
-        float darkX = (float)(px - lightX * radiusPx * 0.15);
-        float darkY = (float)(py - lightY * radiusPx * 0.15);
+        float litX = (float)(px + lightX * radiusPx * 1);
+        float litY = (float)(py + lightY * radiusPx * 1);
+        float darkX = (float)(px - lightX * radiusPx * 0.35);
+        float darkY = (float)(py - lightY * radiusPx * 0.35);
 
         // Colors: normal planet color on lit side, black on shadow side
         Color litColor;
@@ -1434,6 +1939,37 @@ public class SolarSystemSimulation extends JPanel
             targetZoom = currentZoom;
             autoZoomEnabled = false;
         }
+    }
+
+    /**
+     * Toggles the visibility of the menu bar, search bar, and sidebar.
+     * Called when user presses the 'H' key.
+     */
+    private void toggleMenuBarVisibility() {
+        if (parentFrame == null) return;
+
+        menuBarVisible = !menuBarVisible;
+        uiPanelsVisible = !uiPanelsVisible;
+
+        // Toggle menu bar
+        JMenuBar menuBar = parentFrame.getJMenuBar();
+        if (menuBar != null) {
+            menuBar.setVisible(menuBarVisible);
+        }
+
+        // Toggle search bar
+        if (searchBarPanel != null) {
+            searchBarPanel.setVisible(uiPanelsVisible);
+        }
+
+        // Toggle sidebar
+        if (sidebarPanel != null) {
+            sidebarPanel.setVisible(uiPanelsVisible);
+        }
+
+        // Revalidate to update layout
+        parentFrame.revalidate();
+        parentFrame.repaint();
     }
 
     /* ==============================
@@ -1594,8 +2130,10 @@ public class SolarSystemSimulation extends JPanel
             double mx = a * (Math.cos(E) - e);
             double my = b * Math.sin(E);
             double arg = MOON_ARG_PERI[p][m];
-            double rx = mx * Math.cos(arg) - my * Math.sin(arg);
-            double ry = mx * Math.sin(arg) + my * Math.cos(arg);
+            double rxTemp = mx * Math.cos(arg) - my * Math.sin(arg);
+            // Apply 90° clockwise rotation to fix coordinate system
+            double rx = mx * Math.sin(arg) + my * Math.cos(arg);
+            double ry = -rxTemp;
             // Use barycentric coordinates for camera target
             double targetX = planetX[p] + sunBarycenterX + rx;
             double targetY = planetY[p] + sunBarycenterY + ry;
@@ -1676,6 +2214,11 @@ public class SolarSystemSimulation extends JPanel
             currentZoom += (targetZoom - currentZoom) * lerp;
         }
 
+        /* ----- GUIDED TOUR UPDATE ----- */
+        if (lessonMode && guidedTourActive) {
+            updateGuidedTour(dtReal);
+        }
+
         repaint();
     }
 
@@ -1690,6 +2233,381 @@ public class SolarSystemSimulation extends JPanel
         // Sun offset so that center of mass is at origin: M_sun * r_sun + sum m_i r_i = 0
         sunBarycenterX = -totalPx / M_SUN;
         sunBarycenterY = -totalPy / M_SUN;
+    }
+
+    /**
+     * Updates the guided tour for different lessons
+     * This method manages tour steps with manual progression (press N to continue)
+     */
+    private void updateGuidedTour(double dtReal) {
+        // Update tour timer
+        tourStepStartTime += dtReal;
+
+        // Fade in tour message
+        if (tourMessageAlpha < 1.0) {
+            tourMessageAlpha += TOUR_MESSAGE_FADE_SPEED * dtReal;
+            if (tourMessageAlpha > 1.0) tourMessageAlpha = 1.0;
+        }
+
+        // After message is fully faded in and camera settled, allow advancing
+        if (tourMessageAlpha >= 1.0 && tourStepStartTime > 1.5) {
+            tourStepReady = true;
+        }
+
+        // Route to appropriate lesson tour
+        if (currentLesson == 1) {
+            updateLesson1Tour(dtReal);
+        } else if (currentLesson == 2) {
+            updateLesson2Tour(dtReal);
+        }
+    }
+
+    /**
+     * Lesson 1 Tour: Introduction to Orbital Motion
+     */
+    private void updateLesson1Tour(double dtReal) {
+        // Lesson 1 Tour Steps - execute setup on first frame only
+        if (tourStepStartTime < dtReal * 2) { // First frame of this step
+            switch (tourStep) {
+                case 0: // Welcome & Setup
+                    showPlanetOrbits = true;
+                    showPerihelionAphelion = true;
+                    showKeplersLaw = true;
+                    hideAllPlanetsExcept(-1); // Show all for overview
+                    returnToSun();
+                    currentZoom = 2.0;
+                    targetZoom = 2.0;
+                    tourMessage = """
+                            Welcome to Lesson 1: Introduction to Orbital Motion
+                            We'll explore how planets orbit the Sun.
+                            
+                            Press 'N' to continue to the next step.""";
+                    break;
+
+                case 1: // Focus on Venus (circular orbit)
+                    hideAllPlanetsExcept(findPlanetIndex("Venus"));
+                    focusPlanetByNameWithZoom("Venus", 1.0);  // Show full orbit comfortably
+                    tourMessage = """
+                            Venus - Nearly Perfect Circle
+                            Eccentricity ≈ 0.007
+                            Notice how circular the orbit looks!
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 2: // Focus on Earth
+                    hideAllPlanetsExcept(findPlanetIndex("Earth"));
+                    focusPlanetByNameWithZoom("Earth", 0.79);  // Show full orbit comfortably
+                    tourMessage = """
+                            Earth - Also Quite Circular
+                            Eccentricity ≈ 0.017
+                            Our orbit is nearly circular too.
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 3: // Focus on Mars
+                    hideAllPlanetsExcept(findPlanetIndex("Mars"));
+                    focusPlanetByNameWithZoom("Mars", 0.5);  // Show full orbit
+                    tourMessage = """
+                            Mars - More Elliptical
+                            Eccentricity ≈ 0.093
+                            The orbit starts to look stretched.
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 4: // Focus on Mercury
+                    hideAllPlanetsExcept(findPlanetIndex("Mercury"));
+                    focusPlanetByNameWithZoom("Mercury", 1.75);  // Smaller orbit, can zoom more
+                    tourMessage = """
+                            Mercury - Quite Elliptical
+                            Eccentricity ≈ 0.206
+                            Notice the red (P) and blue (A) markers
+                            showing perihelion and aphelion points.
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 5: // Focus on Pluto
+                    hideAllPlanetsExcept(findPlanetIndex("Pluto"));
+                    focusPlanetByNameWithZoom("Pluto", 0.02);  // Large orbit, zoom out (slightly more than 0.04)
+                    tourMessage = """
+                            Pluto - Highly Elliptical
+                            Eccentricity ≈ 0.250
+                            The most eccentric orbit in our tour!
+                            Distance varies dramatically.
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 6: // Kepler's Third Law - Mercury
+                    hideAllPlanetsExcept(findPlanetIndex("Mercury"));
+                    focusPlanetByNameWithZoom("Mercury", 1.75);
+                    tourMessage = """
+                            Kepler's Third Law Verification
+                            Mercury: P² / a³ ≈ 1.0
+                            Check the yellow line in the info panel!
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 7: // Kepler's Third Law - Earth
+                    hideAllPlanetsExcept(findPlanetIndex("Earth"));
+                    focusPlanetByNameWithZoom("Earth", 0.79);
+                    tourMessage = """
+                            Kepler's Third Law Verification
+                            Earth: P² / a³ = 1.0000 (exactly!)
+                            By definition of AU and year.
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 8: // Kepler's Third Law - Jupiter
+                    hideAllPlanetsExcept(findPlanetIndex("Jupiter"));
+                    focusPlanetByNameWithZoom("Jupiter", 0.1);  // Large orbit, zoom out more
+                    tourMessage = """
+                            Kepler's Third Law Verification
+                            Jupiter: P² / a³ ≈ 1.0
+                            The ratio is constant for all planets!
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 9: // Return to overview
+                    restorePlanetVisibility();
+                    returnToSun();
+                    currentZoom = 1.5;
+                    targetZoom = 1.5;
+                    tourMessage = """
+                            Tour Complete!
+                            All planet visibility has been restored.
+                            Feel free to explore on your own.
+                            
+                            Press 'N' to end the tour.""";
+                    break;
+
+                case 10: // End tour
+                    guidedTourActive = false;
+                    tourStep = 0;
+                    tourMessage = "";
+                    tourMessageAlpha = 0.0;
+                    tourStepReady = false;
+                    restorePlanetVisibility();
+                    break;
+            }
+        }
+    }
+
+    /**
+     * Lesson 2 Tour: Orbital Velocity and Kepler's 2nd Law
+     */
+    private void updateLesson2Tour(double dtReal) {
+        // Lesson 2 Tour Steps - execute setup on first frame only
+        if (tourStepStartTime < dtReal * 2) { // First frame of this step
+            switch (tourStep) {
+                case 0: // Welcome & Setup
+                    showPlanetOrbits = true;
+                    showPerihelionAphelion = true;
+                    showVelocityVectors = true;
+                    showVelocityComparison = true;
+                    hideAllPlanetsExcept(-1); // Show all for overview
+                    returnToSun();
+                    currentZoom = 2.0;
+                    targetZoom = 2.0;
+                    tourMessage = """
+                            Welcome to Lesson 2: Orbital Velocity
+                            We'll explore how velocity changes around an orbit.
+                            Velocity vectors show speed and direction.
+                            
+                            Press 'N' to continue to the next step.""";
+                    break;
+
+                case 1: // Explain velocity vectors
+                    returnToSun();
+                    currentZoom = 1.5;
+                    targetZoom = 1.5;
+                    tourMessage = """
+                            Velocity Vectors
+                            Arrows show each planet's velocity.
+                            Blue = slower, Red = faster.
+                            Notice how colors change around the orbit!
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 2: // Mercury at perihelion
+                    hideAllPlanetsExcept(findPlanetIndex("Mercury"));
+                    focusPlanetByNameWithZoom("Mercury", 1.75);  // Same as Lesson 1
+                    tourMessage = """
+                            Mercury - High Eccentricity
+                            Watch the velocity arrow change color
+                            as Mercury moves around its orbit.
+                            Red = fast (perihelion), Blue = slow (aphelion).
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 3: // Mars velocity demonstration
+                    hideAllPlanetsExcept(findPlanetIndex("Mars"));
+                    focusPlanetByNameWithZoom("Mars", 0.5);  // Same as Lesson 1
+                    tourMessage = """
+                            Mars - Velocity Variation
+                            Current speed shown next to arrow.
+                            Mars moves faster when closer to the Sun.
+                            This is Kepler's 2nd Law in action!
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 4: // Earth circular orbit comparison
+                    hideAllPlanetsExcept(findPlanetIndex("Earth"));
+                    focusPlanetByNameWithZoom("Earth", 0.79);  // Same as Lesson 1
+                    tourMessage = """
+                            Earth - Nearly Constant Velocity
+                            Earth's nearly circular orbit means
+                            velocity stays almost constant.
+                            Speed: ~30 km/s year-round.
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 5: // Pluto extreme case
+                    hideAllPlanetsExcept(findPlanetIndex("Pluto"));
+                    focusPlanetByNameWithZoom("Pluto", 0.02);  // Same as Lesson 1
+                    tourMessage = """
+                            Pluto - Extreme Velocity Change
+                            Highly elliptical orbit = huge velocity range!
+                            Perihelion: ~6.1 km/s (fast)
+                            Aphelion: ~3.7 km/s (slow)
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 6: // Kepler's 2nd Law explanation
+                    returnToSun();
+                    currentZoom = 1.5;
+                    targetZoom = 1.5;
+                    hideAllPlanetsExcept(-1); // Show all
+                    tourMessage = """
+                            Kepler's Second Law
+                            "Equal areas in equal times"
+                            Planets move faster when closer to the Sun
+                            to sweep equal orbital areas.
+                            
+                            Press 'N' to continue.""";
+                    break;
+
+                case 7: // Return to overview
+                    restorePlanetVisibility();
+                    returnToSun();
+                    currentZoom = 1.5;
+                    targetZoom = 1.5;
+                    tourMessage = """
+                            Velocity Tour Complete!
+                            You can toggle velocity vectors anytime:
+                            Education → Lesson 2 Features
+                            
+                            Press 'N' to end the tour.""";
+                    break;
+
+                case 8: // End tour
+                    guidedTourActive = false;
+                    tourStep = 0;
+                    tourMessage = "";
+                    tourMessageAlpha = 0.0;
+                    tourStepReady = false;
+                    showVelocityVectors = false;
+                    showVelocityComparison = false;
+                    restorePlanetVisibility();
+                    break;
+            }
+        }
+    }
+
+    /**
+     * Advances to the next tour step
+     */
+    private void advanceTourStep() {
+        tourStep++;
+        tourStepStartTime = 0;
+        tourMessageAlpha = 0.0;
+        tourStepReady = false;
+    }
+
+    /**
+     * Find the index of a planet by name
+     */
+    private int findPlanetIndex(String name) {
+        for (int i = 0; i < NAMES.length; i++) {
+            if (NAMES[i].equals(name)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Focuses camera on a planet by name with custom zoom level
+     */
+    private void focusPlanetByNameWithZoom(String name, double zoom) {
+        for (int i = 0; i < NAMES.length; i++) {
+            if (NAMES[i].equals(name)) {
+                selectedPlanet = i;
+                selectedMoon = -1;
+                cameraFocusMoon = -1;
+                autoZoomEnabled = false; // Disable auto-zoom to use our custom zoom
+                focusPlanetImmediate(i);
+                targetZoom = zoom;
+                currentZoom = zoom;
+                return;
+            }
+        }
+    }
+
+    /**
+     * Hide all planets except the specified one (or show all if index is -1)
+     */
+    private void hideAllPlanetsExcept(int planetIndex) {
+        // Save current visibility state on first call
+        if (savedPlanetVisibility == null) {
+            savedPlanetVisibility = new boolean[planetVisible.length];
+            System.arraycopy(planetVisible, 0, savedPlanetVisibility, 0, planetVisible.length);
+        }
+
+        if (planetIndex == -1) {
+            // Show all planets
+            Arrays.fill(planetVisible, true);
+        } else {
+            // Hide all except the specified planet
+            for (int i = 0; i < planetVisible.length; i++) {
+                planetVisible[i] = (i == planetIndex);
+            }
+        }
+    }
+
+    /**
+     * Restore planet visibility to saved state
+     */
+    private void restorePlanetVisibility() {
+        if (savedPlanetVisibility != null) {
+            System.arraycopy(savedPlanetVisibility, 0, planetVisible, 0, planetVisible.length);
+            savedPlanetVisibility = null;
+        }
+    }
+
+    /**
+     * Returns camera to Sun overview
+     */
+    private void returnToSun() {
+        followingPlanet = followingMoon = false;
+        cameraFocusIndex = cameraFocusMoon = -1;
+        selectedPlanet = selectedMoon = -1;
+        cameraIsApproaching = moonCameraIsApproaching = false;
+        currentZoom = 1.0;
+        targetZoom = 1.0;
+        camX = 0;
+        camY = 0;
     }
 
     /**
@@ -1725,6 +2643,38 @@ public class SolarSystemSimulation extends JPanel
         }
     }
 
+    /**
+     * Custom radio button menu item that doesn't close the menu
+     */
+    static class StayOpenRadioButtonMenuItem extends JRadioButtonMenuItem {
+        public StayOpenRadioButtonMenuItem(String text, boolean selected) {
+            super(text, selected);
+        }
+
+        @Override
+        protected void processMouseEvent(MouseEvent evt) {
+            if (evt.getID() == MouseEvent.MOUSE_RELEASED) {
+                // Capture current menu path BEFORE the default click closes menus.
+                final MenuSelectionManager msm = MenuSelectionManager.defaultManager();
+                final MenuElement[] oldPath = msm.getSelectedPath();
+
+                // Let Swing do the normal toggle + ActionListener firing order.
+                super.doClick(0);
+
+                // Re-apply the previous selection path on the next tick to keep the menu open.
+                SwingUtilities.invokeLater(() -> {
+                    if (oldPath != null && oldPath.length > 0) {
+                        msm.setSelectedPath(oldPath);
+                    }
+                });
+
+                evt.consume();
+            } else {
+                super.processMouseEvent(evt);
+            }
+        }
+    }
+
     /* ==============================
        MAIN
        ============================== */
@@ -1732,6 +2682,7 @@ public class SolarSystemSimulation extends JPanel
         JFrame frame = new JFrame("Solar System Simulation");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         SolarSystemSimulation panel = new SolarSystemSimulation();
+        panel.parentFrame = frame; // Set frame reference for menu toggling
         // ----- Build professional-style UI frame -----
          // Top-level menu bar
          JMenuBar menuBar = new JMenuBar();
@@ -1829,6 +2780,38 @@ public class SolarSystemSimulation extends JPanel
         beltsMenu.add(kuiperBeltItem);
         beltsMenu.add(iceLinesItem);
         viewMenu.add(beltsMenu);
+
+        // UI Size submenu
+        viewMenu.addSeparator();
+        JMenu uiSizeMenu = new JMenu("UI Size");
+        ButtonGroup uiSizeGroup = new ButtonGroup();
+
+        StayOpenRadioButtonMenuItem smallUIItem = new StayOpenRadioButtonMenuItem("Small", false);
+        smallUIItem.addActionListener(_ -> {
+            panel.uiSize = UISize.SMALL;
+            panel.repaint();
+        });
+        uiSizeGroup.add(smallUIItem);
+        uiSizeMenu.add(smallUIItem);
+
+        StayOpenRadioButtonMenuItem normalUIItem = new StayOpenRadioButtonMenuItem("Normal", true);
+        normalUIItem.addActionListener(_ -> {
+            panel.uiSize = UISize.NORMAL;
+            panel.repaint();
+        });
+        uiSizeGroup.add(normalUIItem);
+        uiSizeMenu.add(normalUIItem);
+
+        StayOpenRadioButtonMenuItem largeUIItem = new StayOpenRadioButtonMenuItem("Large", false);
+        largeUIItem.addActionListener(_ -> {
+            panel.uiSize = UISize.LARGE;
+            panel.repaint();
+        });
+        uiSizeGroup.add(largeUIItem);
+        uiSizeMenu.add(largeUIItem);
+
+        viewMenu.add(uiSizeMenu);
+
         JMenu helpMenu = new JMenu("Help");
         JMenuItem controlsItem = new JMenuItem("Controls...");
         controlsItem.addActionListener(_ -> JOptionPane.showMessageDialog(
@@ -1846,6 +2829,8 @@ public class SolarSystemSimulation extends JPanel
                         - L: Toggle labels
                         - B: Show only selected planet
                         - S: Toggle shading
+                        - H: Hide/show all UI (menu, search, sidebar)
+                        - N: Next step in guided tour (when active)
                         
                         Use View menu for:
                         - Asteroid Belt
@@ -1874,12 +2859,138 @@ public class SolarSystemSimulation extends JPanel
         launchMenu.add(launchItem);
         launchMenu.add(quickLaunchItem);
         menuBar.add(launchMenu);
+
+        // Education menu for lessons
+        JMenu educationMenu = new JMenu("Education");
+        StayOpenCheckBoxMenuItem lessonModeItem = new StayOpenCheckBoxMenuItem("Enable Lesson Mode", false);
+        lessonModeItem.addActionListener(_ -> {
+            panel.lessonMode = lessonModeItem.isSelected();
+            // Stop tour if lesson mode is disabled
+            if (!panel.lessonMode) {
+                panel.guidedTourActive = false;
+                panel.tourStep = 0;
+                panel.tourMessage = "";
+                panel.restorePlanetVisibility(); // Restore visibility
+            }
+            panel.repaint();
+        });
+        educationMenu.add(lessonModeItem);
+
+        // Guided Tour toggle button
+        JMenuItem guidedTourItem = new JMenuItem("Start Guided Tour");
+        guidedTourItem.addActionListener(_ -> {
+            if (!panel.lessonMode) {
+                JOptionPane.showMessageDialog(frame,
+                    "Please enable Lesson Mode first!",
+                    "Lesson Mode Required",
+                    JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+
+            // Always check current state and toggle opposite
+            if (panel.guidedTourActive) {
+                // Currently active - STOP the tour
+                panel.guidedTourActive = false;
+                panel.tourStep = 0;
+                panel.tourMessage = "";
+                panel.tourMessageAlpha = 0.0;
+                panel.tourStepReady = false;
+                panel.restorePlanetVisibility(); // Restore visibility when stopping
+                guidedTourItem.setText("Start Guided Tour");
+            } else {
+                // Currently inactive - START the tour
+                panel.guidedTourActive = true;
+                panel.tourStep = 0;
+                panel.tourStepStartTime = 0;
+                panel.tourMessageAlpha = 0.0;
+                panel.tourMessage = "";
+                panel.tourStepReady = false;
+                panel.savedPlanetVisibility = null; // Reset saved state
+                guidedTourItem.setText("Stop Guided Tour");
+
+                // Show info about controls
+                JOptionPane.showMessageDialog(frame,
+                        """
+                                Guided Tour Started!
+                                
+                                Press 'N' to advance to the next step.
+                                The tour will automatically adjust zoom and visibility.""",
+                    "Guided Tour Controls",
+                    JOptionPane.INFORMATION_MESSAGE);
+            }
+            panel.repaint();
+        });
+        educationMenu.add(guidedTourItem);
+        educationMenu.addSeparator();
+
+        // Lesson selector submenu
+        JMenu lessonMenu = new JMenu("Select Lesson");
+        ButtonGroup lessonGroup = new ButtonGroup();
+        String[] lessonNames = {
+            "Lesson 1: Orbital Motion",
+            "Lesson 2: Velocity & Kepler's 2nd Law",
+            "Lesson 3: Scale of Solar System",
+            "Lesson 4: Moon Systems",
+            "Lesson 5: Time Control"
+        };
+        for (int i = 0; i < lessonNames.length; i++) {
+            final int lessonNum = i + 1;
+            JRadioButtonMenuItem lessonItem = new JRadioButtonMenuItem(lessonNames[i], i == 0);
+            lessonGroup.add(lessonItem);
+            lessonItem.addActionListener(_ -> {
+                panel.currentLesson = lessonNum;
+                panel.repaint();
+            });
+            lessonMenu.add(lessonItem);
+        }
+        educationMenu.add(lessonMenu);
+        educationMenu.addSeparator();
+
+        // Lesson 1 specific features
+        JMenu lesson1Menu = new JMenu("Lesson 1 Features");
+        StayOpenCheckBoxMenuItem keplersLawItem = new StayOpenCheckBoxMenuItem("Show Kepler's 3rd Law", false);
+        keplersLawItem.addActionListener(_ -> {
+            panel.showKeplersLaw = keplersLawItem.isSelected();
+            panel.repaint();
+        });
+        StayOpenCheckBoxMenuItem periAphelionItem = new StayOpenCheckBoxMenuItem("Show Perihelion/Aphelion", false);
+        periAphelionItem.addActionListener(_ -> {
+            panel.showPerihelionAphelion = periAphelionItem.isSelected();
+            panel.repaint();
+        });
+        lesson1Menu.add(keplersLawItem);
+        lesson1Menu.add(periAphelionItem);
+        educationMenu.add(lesson1Menu);
+
+        // Lesson 2 specific features (Velocity & Kepler's 2nd Law)
+        JMenu lesson2Menu = new JMenu("Lesson 2 Features");
+        StayOpenCheckBoxMenuItem velocityVectorsItem = new StayOpenCheckBoxMenuItem("Show Velocity Vectors", false);
+        velocityVectorsItem.addActionListener(_ -> {
+            panel.showVelocityVectors = velocityVectorsItem.isSelected();
+            panel.repaint();
+        });
+        StayOpenCheckBoxMenuItem velocityComparisonItem = new StayOpenCheckBoxMenuItem("Show Velocity Labels", false);
+        velocityComparisonItem.addActionListener(_ -> {
+            panel.showVelocityComparison = velocityComparisonItem.isSelected();
+            panel.repaint();
+        });
+        lesson2Menu.add(velocityVectorsItem);
+        lesson2Menu.add(velocityComparisonItem);
+        educationMenu.add(lesson2Menu);
+
+        JMenuItem lessonGuideItem = new JMenuItem("Lesson Guide...");
+        lessonGuideItem.addActionListener(_ -> panel.showLessonGuide(frame));
+        educationMenu.addSeparator();
+        educationMenu.add(lessonGuideItem);
+
+        menuBar.add(educationMenu);
         menuBar.add(helpMenu);
         frame.setJMenuBar(menuBar);
 
         // ----- Top search bar -----
         JPanel topBar = new JPanel(new BorderLayout(8, 0));
         topBar.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+        panel.searchBarPanel = topBar; // Store reference for toggling visibility
         JLabel searchLabel = new JLabel("Search body:");
         panel.searchField = new JTextField();
         panel.searchField.setToolTipText("Type a planet or major moon name (e.g., Earth, Titan)");
@@ -2044,6 +3155,7 @@ public class SolarSystemSimulation extends JPanel
         // Left navigation: hierarchical planet→moon tree
         JPanel leftNav = new JPanel(new BorderLayout());
         leftNav.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 4));
+        panel.sidebarPanel = leftNav; // Store reference for toggling visibility
         JLabel navLabel = new JLabel("Objects");
         navLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
         JPanel treePanel = new JPanel(new BorderLayout());
@@ -2630,6 +3742,109 @@ public class SolarSystemSimulation extends JPanel
         }
     }
 
+    /**
+     * Draw velocity vectors for planets to show Kepler's 2nd Law
+     */
+    private void drawVelocityVectors(Graphics2D g2, int cx, int cy) {
+        for (int i = 0; i < NAMES.length; i++) {
+            if (isPlanetVisible(i)) continue;
+
+            // Planet position
+            double worldX = planetX[i] + sunBarycenterX;
+            double worldY = planetY[i] + sunBarycenterY;
+            double px = cx + (worldX - camX) * METERS_TO_PIXELS * currentZoom;
+            double py = cy + (worldY - camY) * METERS_TO_PIXELS * currentZoom;
+
+            // Calculate velocity direction (perpendicular to radius vector)
+            double dx = worldX - sunBarycenterX;
+            double dy = worldY - sunBarycenterY;
+            double dist = Math.sqrt(dx * dx + dy * dy);
+
+            // Velocity is perpendicular to position vector (for circular approximation)
+            // For elliptical orbits, we use the actual speed from vis-viva equation
+            double vx = -dy / dist;  // perpendicular
+            double vy = dx / dist;
+
+            // Scale velocity vector by actual speed
+            double speed = planetSpeedKmS[i];
+            double vectorScale = 0.00015 * currentZoom;  // Adjust this for visibility
+            double vLength = speed * vectorScale;
+
+            // Draw velocity vector as an arrow
+            double endX = px + vx * vLength;
+            double endY = py + vy * vLength;
+
+            // Dynamic arrow sizing based on UI size
+            float arrowWidth = switch (uiSize) {
+                case SMALL -> 2.0f;
+                case NORMAL -> 2.5f;
+                default -> 3.0f;
+            };
+
+            // Color based on speed (blue for slow, red for fast)
+            double mu = G * (M_SUN + PLANET_MASS[i]);
+            double circularSpeed = Math.sqrt(mu / dist) / 1000.0;  // km/s
+            double speedRatio = speed / circularSpeed;
+
+            // Color gradient: blue (slow) to green (circular) to red (fast)
+            Color vectorColor;
+            if (speedRatio < 1.0) {
+                // Slower than circular: blue-ish
+                int blue = 255;
+                int green = (int)(speedRatio * 150);
+                vectorColor = new Color(50, green, blue, 220);
+            } else {
+                // Faster than circular: yellow to red
+                int red = Math.min(255, (int)((speedRatio - 1.0) * 400 + 200));
+                int green = Math.max(100, 255 - (int)((speedRatio - 1.0) * 300));
+                vectorColor = new Color(red, green, 50, 220);
+            }
+
+            g2.setColor(vectorColor);
+            g2.setStroke(new BasicStroke(arrowWidth));
+            g2.drawLine((int)px, (int)py, (int)endX, (int)endY);
+
+            // Draw arrowhead
+            double arrowHeadSize = 8.0 * (arrowWidth / 2.5);
+            double angle = Math.atan2(endY - py, endX - px);
+            int x1 = (int)(endX - arrowHeadSize * Math.cos(angle - Math.PI / 6));
+            int y1 = (int)(endY - arrowHeadSize * Math.sin(angle - Math.PI / 6));
+            int x2 = (int)(endX - arrowHeadSize * Math.cos(angle + Math.PI / 6));
+            int y2 = (int)(endY - arrowHeadSize * Math.sin(angle + Math.PI / 6));
+
+            g2.fillPolygon(new int[]{(int)endX, x1, x2}, new int[]{(int)endY, y1, y2}, 3);
+
+            // Draw speed label if showing velocity comparison
+            if (showVelocityComparison) {
+                float labelFontSize = switch (uiSize) {
+                    case SMALL -> 9f;
+                    case NORMAL -> 11f;
+                    default -> 13f;
+                };
+
+                Font oldFont = g2.getFont();
+                g2.setFont(oldFont.deriveFont(Font.BOLD, labelFontSize));
+                String speedLabel = String.format("%.1f km/s", speed);
+                FontMetrics fm = g2.getFontMetrics();
+                int labelWidth = fm.stringWidth(speedLabel);
+                int labelHeight = fm.getHeight();
+
+                // Position label near arrow tip
+                int labelX = (int)endX + 10;
+                int labelY = (int)endY - 5;
+
+                // Background box
+                g2.setColor(new Color(0, 0, 0, 180));
+                g2.fillRoundRect(labelX - 3, labelY - labelHeight + 3, labelWidth + 6, labelHeight, 4, 4);
+
+                // Text
+                g2.setColor(vectorColor);
+                g2.drawString(speedLabel, labelX, labelY);
+                g2.setFont(oldFont);
+            }
+        }
+    }
+
     private void drawLaunchedObjects(Graphics2D g2, int cx, int cy) {
         if (launchedObjects.isEmpty()) return;
         Stroke oldStroke = g2.getStroke();
@@ -2721,6 +3936,179 @@ public class SolarSystemSimulation extends JPanel
             this.color = color;
             this.shape = shape;
         }
+    }
+
+    /**
+     * Display a lesson guide dialog for the current lesson.
+     */
+    private void showLessonGuide(Window owner) {
+        String[] lessonContent = {
+            // Lesson 1: Introduction to Orbital Motion
+            """
+            Lesson 1: Introduction to Orbital Motion
+            ========================================
+            
+            Learning Objectives:
+            • Understand elliptical vs. circular orbits
+            • Identify key orbital elements (a, e, perihelion, aphelion)
+            • Relate orbital period to distance from Sun
+            
+            Activities:
+            
+            1. Orbit Comparison
+               - Press 'O' to show all planet orbits
+               - Click Venus (nearly circular orbit)
+               - Click Pluto (highly elliptical orbit)
+               - Compare eccentricities in the info panel
+            
+            2. Kepler's Third Law Verification
+               - Enable: Education → Lesson 1 Features → Show Kepler's 3rd Law
+               - Click Mercury: note P² / a³ ratio
+               - Click Earth: note P² / a³ ratio (should be ~1.0)
+               - Click Jupiter: verify the ratio is constant
+               - The ratio P² / a³ should be the same for all planets!
+            
+            3. Speed Variations
+               - Click Mercury to follow it
+               - Press Ctrl+Scroll to speed up time
+               - Watch the speed value change in the info panel
+               - Observe: faster near the Sun (perihelion), slower far away (aphelion)
+               - Enable: Education → Lesson 1 Features → Show Perihelion/Aphelion
+            
+            Assessment Questions:
+            - Why is Mercury's orbit more elliptical than Earth's?
+            - How does orbital speed relate to distance from the Sun?
+            - Calculate: If a planet orbits at 4 AU, what would its period be?
+              (Hint: Use P² = a³ with a = 4, so P² = 64, P = 8 years)
+            """,
+
+            // Lesson 2: Scale of the Solar System
+            """
+            Lesson 2: Scale of the Solar System
+            ===================================
+            
+            Learning Objectives:
+            • Appreciate the vast distances in the Solar System
+            • Understand the AU (Astronomical Unit) as a measurement
+            • Compare planet sizes and distances
+            
+            Activities:
+            
+            1. Distance Exploration
+               - Zoom out to see the full system
+               - Use the dynamic scale ruler (bottom-left) to measure distances
+               - Drag the ruler to different positions
+               - Compare inner planet spacing vs. outer planets
+            
+            2. Zoom Challenge
+               - Click Earth → auto-zoom to planet view
+               - Press 'X' to cycle zoom modes (Planet → Orbit → Manual)
+               - Observe how small Earth is compared to its orbit
+            
+            3. Belt Visualization
+               - View → Belts & Lines → Asteroid Belt
+               - View → Belts & Lines → Kuiper Belt
+               - View → Belts & Lines → Frost Lines
+               - Discuss where different materials can exist
+            """,
+
+            // Lesson 3: Moon Systems
+            """
+            Lesson 3: Moon Systems and Hierarchical Orbits
+            ==============================================
+            
+            Learning Objectives:
+            • Understand moons as satellites orbiting planets
+            • Compare moon systems of different planets
+            • Observe orbital relationships
+            
+            Activities:
+            
+            1. Earth-Moon System
+               - Click Earth, then zoom in
+               - Click the Moon to see its orbit details
+               - Note the Moon's orbital period (27.3 days)
+            
+            2. Jupiter's Galilean Moons
+               - Click Jupiter and zoom in
+               - Observe Io, Europa, Ganymede, Callisto
+               - Speed up time to see their orbital motions
+            
+            3. Saturn's Moons
+               - Click Saturn
+               - Toggle rings with 'R'
+               - Observe Titan and other moons
+            """,
+
+            // Lesson 4: Time Control
+            """
+            Lesson 4: Time and Simulation Control
+            =====================================
+            
+            Learning Objectives:
+            • Understand different time scales in astronomy
+            • Use simulation controls for observation
+            
+            Activities:
+            
+            1. Time Scale Manipulation
+               - Use Ctrl+Scroll to speed up time
+               - Watch Mercury complete one orbit (~88 days)
+               - Press Space or 'P' to pause
+            
+            2. Study Configurations
+               - Pause simulation at interesting moments
+               - Record data from info panels
+               - Resume and observe changes
+            """,
+
+            // Lesson 5: Planetary Characteristics
+            """
+            Lesson 5: Planetary Characteristics
+            ==================================
+            
+            Learning Objectives:
+            • Compare physical properties of planets
+            • Understand planet classification
+            
+            Activities:
+            
+            1. Size Comparison
+               - Click different planets to compare radii
+               - Earth: 6,371 km
+               - Jupiter: 69,911 km (11× Earth)
+               - Mercury: 2,439 km (0.38× Earth)
+            
+            2. Orbit Color Coding
+               - Purple/magenta: terrestrial planets
+               - Golden/tan: gas giants
+               - Purple-gray: dwarf planets
+            
+            3. Features
+               - Toggle shading with 'S'
+               - Toggle Saturn's rings with 'R'
+            """
+        };
+
+        int lessonIndex = currentLesson - 1;
+        if (lessonIndex < 0 || lessonIndex >= lessonContent.length) {
+            lessonIndex = 0;
+        }
+
+        JTextArea textArea = new JTextArea(lessonContent[lessonIndex]);
+        textArea.setEditable(false);
+        textArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        textArea.setCaretPosition(0);
+
+        JScrollPane scrollPane = new JScrollPane(textArea);
+        scrollPane.setPreferredSize(new Dimension(650, 500));
+
+        JOptionPane.showMessageDialog(
+            owner,
+            scrollPane,
+            "Lesson " + currentLesson + " Guide",
+            JOptionPane.INFORMATION_MESSAGE
+        );
     }
 
     private static final class TreeBody {
