@@ -29,11 +29,12 @@ import java.util.*;
  * integrator that accounts for mutual gravitational attraction between planets
  * and the central Sun (Sun is fixed at origin).
  *
- * @author Ethan Lin (original) + N-body integration by ChatGPT
+ * @author Ethan Lin (original)
  * @version 3.0
  */
 
-//TODO: Sympletic Integration, leapfrog, rebound, saturn rings
+//TODO: Sympletic Integration - leapfrog, rebound, saturn ring shadow, UI polish, API for planet data
+
 public class SolarSystemSimulation extends JPanel
         implements ActionListener, MouseWheelListener, MouseListener, MouseMotionListener {
 
